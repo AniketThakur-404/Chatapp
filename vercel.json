@@ -7,13 +7,12 @@
       "config": {
         "bundle": false,
         "includeFiles": [
-          "node_modules/**"
+          "node_modules/mysql2/**"
         ]
       }
     }
   ],
   "routes": [
-    { "src": "/api/(.*)", "dest": "/server.js" },
     { "src": "/(.*)", "dest": "/server.js" }
   ],
   "env": {
