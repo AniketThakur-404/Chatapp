@@ -6,9 +6,25 @@ const app = express();
 const bot = new WhatsAppCarProtectionBot();
 
 // Configure runtime secrets via environment variables
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'verify-token-not-set';
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN || '';
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+
+function validateRequiredEnv() {
+  const missing = [];
+  if (!VERIFY_TOKEN) missing.push('VERIFY_TOKEN');
+  if (!ACCESS_TOKEN) missing.push('ACCESS_TOKEN');
+  if (!PHONE_NUMBER_ID) missing.push('PHONE_NUMBER_ID');
+  if (!process.env.DB_HOST) missing.push('DB_HOST');
+  if (!process.env.DB_NAME) missing.push('DB_NAME');
+  if (!process.env.DB_USER) missing.push('DB_USER');
+  if (!process.env.DB_PASSWORD) missing.push('DB_PASSWORD');
+
+  if (missing.length) {
+    console.error(`⚠️ Missing required env vars: ${missing.join(', ')}`);
+  }
+  return missing;
+}
 
 // ====================================================
 // ✅ 1. DATABASE SETUP (MySQL via Sequelize)
@@ -22,6 +38,8 @@ const { initializeDatabase } = require('./initDatabase');
 // Initialize database and create tables
 async function startServer() {
   try {
+    validateRequiredEnv();
+
     // Initialize database and create all tables
     await initializeDatabase();
 
@@ -35,7 +53,7 @@ async function startServer() {
 
   } catch (error) {
     console.error('❌ Failed to start server:', error);
-    process.exit(1);
+    // In serverless, avoid exiting the process so diagnostics can be returned
   }
 }
 
