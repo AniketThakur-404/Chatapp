@@ -1,13 +1,14 @@
 const express = require('express');
+require('dotenv').config();
 const axios = require('axios');
 const WhatsAppCarProtectionBot = require('./bot');
 const app = express();
 const bot = new WhatsAppCarProtectionBot();
 
-// Replace these with your actual values from Meta Dashboard
-const VERIFY_TOKEN = '12345';
-const ACCESS_TOKEN = 'EAAXHTR0idusBQARsHDUKUoHaQQZBveeVumI1LQTKy0Xv8txZCe3qihKZCY43LS6LF722EvnNporLJLJn4aF5VqZALdyNZChxTbyZAZBGfhWStSV9G2NQQIjke9LuXJb8bWzOtTWEsUvy25nZBty8EYmioUbvjfdaaFOJJKYsHuZC5cSPfZCXnNFD4tvETqZCBzdCVNyZCymrB6KFG8XQ097JWvNA9CicB1bQoKtFxSZBNjBI6WVw9UpCO9ibCMbQ5Al5APC4iDQJdqxaDGM1MxkKXpnU5';
-const PHONE_NUMBER_ID = '829582483579160';
+// Configure runtime secrets via environment variables
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'verify-token-not-set';
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 
 // ====================================================
 // ✅ 1. DATABASE SETUP (MySQL via Sequelize)
@@ -263,6 +264,11 @@ function getLastBotMessageWithButtons(session) {
 async function sendWhatsAppResponse(to, response) {
   console.log(`🔍 sendWhatsAppResponse called for: ${to}`);
   console.log(`📋 Response type: ${response.buttons ? 'with buttons' : 'text only'}`);
+
+  if (!ACCESS_TOKEN || !PHONE_NUMBER_ID) {
+    console.error('❌ ACCESS_TOKEN or PHONE_NUMBER_ID missing — cannot send WhatsApp message.');
+    return;
+  }
 
   const url = `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`;
   const headers = {

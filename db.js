@@ -1,11 +1,20 @@
 // db.js
+require('dotenv').config();
 const { Sequelize } = require('sequelize');
 
-const sequelize = new Sequelize('auto_ayushdb', 'auto_ayushuser', 'ayush@123', {
-  host: '31.97.235.133',
-  port: 3306,
+const {
+  DB_HOST = '31.97.235.133',
+  DB_PORT = '3306',
+  DB_NAME = 'auto_ayushdb',
+  DB_USER = 'auto_ayushuser',
+  DB_PASSWORD = 'ayush@123'
+} = process.env;
+
+const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
+  host: DB_HOST,
+  port: Number(DB_PORT) || 3306,
   dialect: 'mysql',
-  logging: false, // optional
+  logging: false,
   pool: {
     max: 5,
     min: 0,
