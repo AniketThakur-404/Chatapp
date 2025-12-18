@@ -6,7 +6,7 @@
       "use": "@vercel/node",
       "config": {
         "includeFiles": [
-          "node_modules/mysql2/**"
+          "node_modules/**"
         ]
       }
     }
@@ -14,7 +14,7 @@
   "functions": {
     "**/*.js": {
       "includeFiles": [
-        "node_modules/mysql2/**"
+        "node_modules/**"
       ]
     }
   },
