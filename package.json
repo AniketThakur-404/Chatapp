@@ -7,7 +7,8 @@
     "start": "node server.js",
     "test": "node test-console.js",
     "dev": "node server.js",
-    "setup-db": "node setup-database.js"
+    "setup-db": "node setup-database.js",
+    "build": "node --check server.js && node --check bot.js"
   },
   "dependencies": {
     "axios": "^1.11.0",
