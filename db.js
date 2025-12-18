@@ -1,6 +1,7 @@
 // db.js
 require('dotenv').config();
 const { Sequelize } = require('sequelize');
+require('mysql2'); // ensure mysql2 driver is available/bundled for Sequelize
 
 const {
   DB_HOST = '31.97.235.133',
