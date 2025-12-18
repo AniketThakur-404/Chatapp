@@ -5,29 +5,16 @@
       "src": "server.js",
       "use": "@vercel/node",
       "config": {
+        "bundle": false,
         "includeFiles": [
           "node_modules/**"
-        ],
-        "bundle": false
+        ]
       }
     }
   ],
-  "functions": {
-    "**/*.js": {
-      "includeFiles": [
-        "node_modules/**"
-      ]
-    }
-  },
   "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/server.js"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/server.js"
-    }
+    { "src": "/api/(.*)", "dest": "/server.js" },
+    { "src": "/(.*)", "dest": "/server.js" }
   ],
   "env": {
     "NODE_ENV": "production"
