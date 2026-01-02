@@ -1,6 +1,5 @@
 // db.js - Database client for NeonDB PostgreSQL
-// Uses pg driver directly for Windows ARM compatibility
-// Prisma-like interface for easy migration
+// Works on both local development and Vercel serverless
 require('dotenv').config();
 const { Pool } = require('pg');
 
@@ -10,11 +9,13 @@ if (!connectionString) {
   throw new Error('DATABASE_URL environment variable is not set');
 }
 
-// Create PostgreSQL connection pool
-// NeonDB requires SSL - the connection string should include sslmode=require
+// Create PostgreSQL connection pool with SSL for NeonDB
 const pool = new Pool({
   connectionString,
-  // SSL is handled by the connection string (sslmode=require)
+  ssl: connectionString.includes('neon.tech') ? { rejectUnauthorized: false } : false,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
 });
 
 // Database helper functions with Prisma-like interface
