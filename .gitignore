@@ -3,3 +3,4 @@
 .vercel
 
 /generated/prisma
+node_modules/
