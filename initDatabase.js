@@ -10,15 +10,22 @@ async function initializeDatabase() {
   try {
     console.log('🔄 Initializing NeonDB PostgreSQL database...');
 
-    // Note: "User" table already exists with id (text) and phoneNumber (text)
-    console.log('ℹ️ Assuming "User" table exists (skipping creation)');
+    // User Table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS "User" (
+        id SERIAL PRIMARY KEY,
+        phone_number VARCHAR(255) UNIQUE NOT NULL,
+        name VARCHAR(255),
+        "createdAt" TIMESTAMP DEFAULT NOW(),
+        "updatedAt" TIMESTAMP DEFAULT NOW()
+      );
+    `);
 
     // Session Table
-    // userId must be TEXT because User.id is TEXT in the existing schema
     await pool.query(`
       CREATE TABLE IF NOT EXISTS "Session" (
         id SERIAL PRIMARY KEY,
-        "userId" TEXT REFERENCES "User"(id),
+        "userId" INTEGER REFERENCES "User"(id),
         current_step VARCHAR(255),
         selected_package VARCHAR(255),
         location VARCHAR(255),
@@ -39,10 +46,10 @@ async function initializeDatabase() {
       );
     `);
 
-    console.log('✅ Database tables checked/created successfully!');
-    console.log('   - User (Existing)');
-    console.log('   - Session (Created/Checked)');
-    console.log('   - Message (Created/Checked)');
+    console.log('✅ Database tables created successfully!');
+    console.log('   - User');
+    console.log('   - Session');
+    console.log('   - Message');
 
     await pool.end();
     return true;

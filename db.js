@@ -24,16 +24,14 @@ const db = {
   user: {
     findUnique: async ({ where }) => {
       const result = await pool.query(
-        'SELECT * FROM "User" WHERE "phoneNumber" = $1',
+        'SELECT * FROM "User" WHERE phone_number = $1',
         [where.phone_number]
       );
       return result.rows[0] || null;
     },
     create: async ({ data }) => {
-      // Assuming id has a default (UUID) or serial.
-      // If "User" table requires ID, this might fail if no default.
       const result = await pool.query(
-        'INSERT INTO "User" ("phoneNumber", name, "createdAt", "updatedAt") VALUES ($1, $2, NOW(), NOW()) RETURNING *',
+        'INSERT INTO "User" (phone_number, name, "createdAt", "updatedAt") VALUES ($1, $2, NOW(), NOW()) RETURNING *',
         [data.phone_number, data.name || null]
       );
       return result.rows[0];
