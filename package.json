@@ -6,34 +6,20 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node test-console.js",
-    "db:generate": "prisma generate",
-    "db:push": "prisma db push",
-    "db:migrate": "prisma migrate deploy",
-    "db:studio": "prisma studio",
-    "postinstall": "prisma generate",
-    "build": "prisma generate"
+    "test": "node test-console.js"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.0.2",
-    "@prisma/adapter-neon": "^7.2.0",
-    "@prisma/client": "^6.19.1",
     "axios": "^1.11.0",
     "dotenv": "^16.6.1",
     "express": "^4.18.2",
     "pg": "^8.16.3",
-    "twilio": "^5.8.0",
-    "ws": "^8.18.3"
-  },
-  "devDependencies": {
-    "prisma": "^6.19.1"
+    "twilio": "^5.8.0"
   },
   "keywords": [
     "whatsapp",
     "chatbot",
     "car-protection",
     "neondb",
-    "prisma",
     "vercel"
   ],
   "author": "",
