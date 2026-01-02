@@ -1,0 +1,19 @@
+[dotenv@17.2.3] injecting env (9) from .env -- tip: 📡 add observability to secrets: https://dotenvx.com/ops
+[dotenv@17.2.3] injecting env (0) from .env -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
+🔄 Initializing MySQL database...
+✅ Database connection established successfully.
+🔄 Creating database tables...
+✅ All database tables created successfully!
+📋 Tables created:
+   - Users (id, phone_number, name, createdAt, updatedAt)
+   - Sessions (id, current_step, selected_package, location, UserId, createdAt, updatedAt)
+   - Messages (id, sender, message_text, SessionId, createdAt, updatedAt)
+🚀 WhatsApp Car Protection Chatbot running on port 3000
+📊 Database: MySQL (auto_ayushdb)
+🌐 Server ready to receive WhatsApp webhooks
+2025-12-20T09:06:43.545Z - GET /webhook
+✅ Webhook verified successfully!
+2025-12-20T09:09:54.735Z - POST /send-template
+2025-12-20T09:11:01.440Z - POST /send-template
+2025-12-20T09:18:30.082Z - POST /send-template
+2025-12-20T09:18:30.547Z - POST /send-template

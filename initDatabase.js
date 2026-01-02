@@ -1,30 +1,19 @@
 // initDatabase.js - Database initialization script
-const sequelize = require('./db');
-const User = require('./models/User');
-const Session = require('./models/Session');
-const Message = require('./models/Message');
+const db = require('./db');
 
 async function initializeDatabase() {
   try {
-    console.log('🔄 Initializing MySQL database...');
-    
+    console.log('🔄 Initializing NeonDB PostgreSQL database...');
+
     // Test database connection
-    await sequelize.authenticate();
+    await db.$connect();
     console.log('✅ Database connection established successfully.');
-    
-    // Create all tables
-    console.log('🔄 Creating database tables...');
-    
-    // Force sync will drop existing tables and recreate them
-    // Use { force: false, alter: true } for production to preserve data
-    await sequelize.sync({ force: false, alter: true });
-    
-    console.log('✅ All database tables created successfully!');
-    console.log('📋 Tables created:');
-    console.log('   - Users (id, phone_number, name, createdAt, updatedAt)');
-    console.log('   - Sessions (id, current_step, selected_package, location, UserId, createdAt, updatedAt)');
-    console.log('   - Messages (id, sender, message_text, SessionId, createdAt, updatedAt)');
-    
+
+    console.log('📋 Database ready with tables:');
+    console.log('   - User (id, phone_number, name, createdAt, updatedAt)');
+    console.log('   - Session (id, current_step, selected_package, location, userId, createdAt, updatedAt)');
+    console.log('   - Message (id, sender, message_text, sessionId, createdAt, updatedAt)');
+
     return true;
   } catch (error) {
     console.error('❌ Database initialization failed:', error);
@@ -32,4 +21,9 @@ async function initializeDatabase() {
   }
 }
 
-module.exports = { initializeDatabase };
+// Graceful shutdown
+async function disconnectDatabase() {
+  await db.$disconnect();
+}
+
+module.exports = { initializeDatabase, disconnectDatabase };

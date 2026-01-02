@@ -1,45 +1,23 @@
 const express = require('express');
-require('dotenv').config();
 const axios = require('axios');
 const WhatsAppCarProtectionBot = require('./bot');
 const app = express();
 const bot = new WhatsAppCarProtectionBot();
 
-// Configure runtime secrets via environment variables
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN || '';
+// WhatsApp Configuration from environment variables
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'CarBot2025';
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 
-function validateRequiredEnv() {
-  const missing = [];
-  if (!VERIFY_TOKEN) missing.push('VERIFY_TOKEN');
-  if (!ACCESS_TOKEN) missing.push('ACCESS_TOKEN');
-  if (!PHONE_NUMBER_ID) missing.push('PHONE_NUMBER_ID');
-  if (!process.env.DB_HOST) missing.push('DB_HOST');
-  if (!process.env.DB_NAME) missing.push('DB_NAME');
-  if (!process.env.DB_USER) missing.push('DB_USER');
-  if (!process.env.DB_PASSWORD) missing.push('DB_PASSWORD');
-
-  if (missing.length) {
-    console.error(`⚠️ Missing required env vars: ${missing.join(', ')}`);
-  }
-  return missing;
-}
-
 // ====================================================
-// ✅ 1. DATABASE SETUP (MySQL via Sequelize)
+// ✅ 1. DATABASE SETUP (NeonDB PostgreSQL via pg driver)
 // ====================================================
-const sequelize = require('./db');
-const User = require('./models/User');
-const Session = require('./models/Session');
-const Message = require('./models/Message');
-const { initializeDatabase } = require('./initDatabase');
+const prisma = require('./db');
+const { initializeDatabase, disconnectDatabase } = require('./initDatabase');
 
 // Initialize database and create tables
 async function startServer() {
   try {
-    validateRequiredEnv();
-
     // Initialize database and create all tables
     await initializeDatabase();
 
@@ -47,13 +25,13 @@ async function startServer() {
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => {
       console.log(`🚀 WhatsApp Car Protection Chatbot running on port ${PORT}`);
-      console.log(`📊 Database: MySQL (auto_ayushdb)`);
+      console.log(`📊 Database: NeonDB PostgreSQL`);
       console.log(`🌐 Server ready to receive WhatsApp webhooks`);
     });
 
   } catch (error) {
     console.error('❌ Failed to start server:', error);
-    // In serverless, avoid exiting the process so diagnostics can be returned
+    process.exit(1);
   }
 }
 
@@ -139,26 +117,29 @@ app.post('/webhook', async (req, res) => {
     // ====================================================
     // 🧠 DATABASE INTEGRATION START
     // ====================================================
-    let user = await User.findOne({ where: { phone_number: senderId } });
+    let user = await prisma.user.findUnique({ where: { phone_number: senderId } });
     if (!user) {
-      user = await User.create({ phone_number: senderId });
+      user = await prisma.user.create({ data: { phone_number: senderId } });
     }
 
-    let session = await Session.findOne({
-      where: { UserId: user.id },
-      order: [['updatedAt', 'DESC']],
+    let session = await prisma.session.findFirst({
+      where: { userId: user.id },
     });
     if (!session) {
-      session = await Session.create({
-        UserId: user.id,
-        current_step: 'welcome',
+      session = await prisma.session.create({
+        data: {
+          userId: user.id,
+          current_step: 'welcome',
+        },
       });
     }
 
-    await Message.create({
-      SessionId: session.id,
-      sender: 'user',
-      message_text: messageText,
+    await prisma.message.create({
+      data: {
+        sessionId: session.id,
+        sender: 'user',
+        message_text: messageText,
+      },
     });
     // ====================================================
 
@@ -176,10 +157,12 @@ app.post('/webhook', async (req, res) => {
     const botResponse = bot.processMessage(senderId, messageText, user.name);
 
     // Save bot response in DB
-    await Message.create({
-      SessionId: session.id,
-      sender: 'bot',
-      message_text: botResponse.text,
+    await prisma.message.create({
+      data: {
+        sessionId: session.id,
+        sender: 'bot',
+        message_text: botResponse.text,
+      },
     });
 
     // Update session step & data
@@ -187,14 +170,20 @@ app.post('/webhook', async (req, res) => {
 
     // If name was collected, save it to the user record
     if (liveSession?.user_name && liveSession?.name_collected && !user.name) {
-      await user.update({ name: liveSession.user_name });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { name: liveSession.user_name }
+      });
       console.log(`✅ Saved user name: ${liveSession.user_name} for ${senderId}`);
     }
 
-    await session.update({
-      current_step: liveSession?.step || 'unknown',
-      selected_package: liveSession?.selected_package || null,
-      location: liveSession?.location || null,
+    await prisma.session.update({
+      where: { id: session.id },
+      data: {
+        current_step: liveSession?.step || 'unknown',
+        selected_package: liveSession?.selected_package || null,
+        location: liveSession?.location || null,
+      },
     });
 
     // ====================================================
@@ -282,11 +271,6 @@ function getLastBotMessageWithButtons(session) {
 async function sendWhatsAppResponse(to, response) {
   console.log(`🔍 sendWhatsAppResponse called for: ${to}`);
   console.log(`📋 Response type: ${response.buttons ? 'with buttons' : 'text only'}`);
-
-  if (!ACCESS_TOKEN || !PHONE_NUMBER_ID) {
-    console.error('❌ ACCESS_TOKEN or PHONE_NUMBER_ID missing — cannot send WhatsApp message.');
-    return;
-  }
 
   const url = `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`;
   const headers = {

@@ -1,0 +1,7 @@
+[dotenv@17.2.3] injecting env (10) from .env -- tip: 🗂️ backup and recover secrets: https://dotenvx.com/ops
+[dotenv@17.2.3] injecting env (0) from .env -- tip: ⚙️  enable debug logging with { debug: true }
+dY", Skipping database initialization (SKIP_DB_INIT=true).
+🚀 WhatsApp Car Protection Chatbot running on port 3000
+📊 Database: MySQL (auto_ayushdb)
+🌐 Server ready to receive WhatsApp webhooks
+2025-12-29T09:22:18.493Z - GET /templates

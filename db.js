@@ -1,35 +1,99 @@
-// db.js
+// db.js - Database client for NeonDB PostgreSQL
+// Uses pg driver directly for Windows ARM compatibility
+// Prisma-like interface for easy migration
 require('dotenv').config();
-const { Sequelize } = require('sequelize');
-require('mysql2'); // ensure mysql2 driver is available/bundled for Sequelize
+const { Pool } = require('pg');
 
-const {
-  DB_HOST = '31.97.235.133',
-  DB_PORT = '3306',
-  DB_NAME = 'auto_ayushdb',
-  DB_USER = 'auto_ayushuser',
-  DB_PASSWORD = 'ayush@123'
-} = process.env;
+const connectionString = process.env.DATABASE_URL;
 
-const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
-  host: DB_HOST,
-  port: Number(DB_PORT) || 3306,
-  dialect: 'mysql',
-  logging: false,
-  pool: {
-    max: 5,
-    min: 0,
-    acquire: 30000,
-    idle: 10000
-  },
-  dialectOptions: {
-    connectTimeout: 30000,
-    charset: 'utf8mb4'
-  },
-  define: {
-    charset: 'utf8mb4',
-    collate: 'utf8mb4_unicode_ci'
-  }
+if (!connectionString) {
+  throw new Error('DATABASE_URL environment variable is not set');
+}
+
+// Create PostgreSQL connection pool
+// NeonDB requires SSL - the connection string should include sslmode=require
+const pool = new Pool({
+  connectionString,
+  // SSL is handled by the connection string (sslmode=require)
 });
 
-module.exports = sequelize;
+// Database helper functions with Prisma-like interface
+const db = {
+  // User operations
+  user: {
+    findUnique: async ({ where }) => {
+      const result = await pool.query(
+        'SELECT * FROM "User" WHERE phone_number = $1',
+        [where.phone_number]
+      );
+      return result.rows[0] || null;
+    },
+    create: async ({ data }) => {
+      const result = await pool.query(
+        'INSERT INTO "User" (phone_number, name, "createdAt", "updatedAt") VALUES ($1, $2, NOW(), NOW()) RETURNING *',
+        [data.phone_number, data.name || null]
+      );
+      return result.rows[0];
+    },
+    update: async ({ where, data }) => {
+      const result = await pool.query(
+        'UPDATE "User" SET name = $1, "updatedAt" = NOW() WHERE id = $2 RETURNING *',
+        [data.name, where.id]
+      );
+      return result.rows[0];
+    }
+  },
+
+  // Session operations
+  session: {
+    findFirst: async ({ where, orderBy }) => {
+      const result = await pool.query(
+        'SELECT * FROM "Session" WHERE "userId" = $1 ORDER BY "updatedAt" DESC LIMIT 1',
+        [where.userId]
+      );
+      return result.rows[0] || null;
+    },
+    create: async ({ data }) => {
+      const result = await pool.query(
+        'INSERT INTO "Session" ("userId", current_step, selected_package, location, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING *',
+        [data.userId, data.current_step || null, data.selected_package || null, data.location || null]
+      );
+      return result.rows[0];
+    },
+    update: async ({ where, data }) => {
+      const result = await pool.query(
+        'UPDATE "Session" SET current_step = $1, selected_package = $2, location = $3, "updatedAt" = NOW() WHERE id = $4 RETURNING *',
+        [data.current_step, data.selected_package, data.location, where.id]
+      );
+      return result.rows[0];
+    }
+  },
+
+  // Message operations
+  message: {
+    create: async ({ data }) => {
+      const result = await pool.query(
+        'INSERT INTO "Message" ("sessionId", sender, message_text, "createdAt", "updatedAt") VALUES ($1, $2, $3, NOW(), NOW()) RETURNING *',
+        [data.sessionId, data.sender, data.message_text]
+      );
+      return result.rows[0];
+    }
+  },
+
+  // Connection management
+  $connect: async () => {
+    const client = await pool.connect();
+    client.release();
+    return true;
+  },
+  $disconnect: async () => {
+    await pool.end();
+  },
+  $queryRaw: async (strings, ...values) => {
+    const query = strings.join('$');
+    const result = await pool.query(query, values);
+    return result.rows;
+  }
+};
+
+module.exports = db;

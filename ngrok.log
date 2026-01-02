@@ -1,0 +1,32 @@
+t=2025-12-20T14:07:49+0530 lvl=info msg="no configuration paths supplied"
+t=2025-12-20T14:07:50+0530 lvl=info msg="using configuration at default config path" path=C:\\Users\\anike\\AppData\\Local/ngrok/ngrok.yml
+t=2025-12-20T14:07:50+0530 lvl=info msg="open config file" path=C:\\Users\\anike\\AppData\\Local\\ngrok\\ngrok.yml err=nil
+t=2025-12-20T14:07:50+0530 lvl=info msg="starting web service" obj=web addr=127.0.0.1:4040 allow_hosts=[]
+t=2025-12-20T14:07:50+0530 lvl=info msg="client session established" obj=tunnels.session
+t=2025-12-20T14:07:50+0530 lvl=info msg="tunnel session started" obj=tunnels.session
+t=2025-12-20T14:07:50+0530 lvl=info msg="started tunnel" obj=tunnels name=command_line addr=http://localhost:3000 url=https://toothlike-in-effetely.ngrok-free.dev
+t=2025-12-20T14:07:51+0530 lvl=info msg="update available" obj=updater
+t=2025-12-20T14:08:16+0530 lvl=info msg="join connections" obj=join id=51ab442844b0 l=[::1]:3000 r=[2406:b400:72:1009:2c2e:c761:8f39:2b3d]:55699
+t=2025-12-20T14:09:07+0530 lvl=info msg="join connections" obj=join id=b38f5bd42c1f l=[::1]:3000 r=[2406:b400:72:1009:2c2e:c761:8f39:2b3d]:62735
+t=2025-12-20T14:09:34+0530 lvl=info msg="join connections" obj=join id=cdc3dbc2fa07 l=[::1]:3000 r=[2406:b400:72:1009:2c2e:c761:8f39:2b3d]:56247
+t=2025-12-20T14:30:31+0530 lvl=eror msg="session closed, starting reconnect loop" obj=tunnels.session obj=csess id=8d9c13359948 err="read tcp [2406:b400:72:1009:2c2e:c761:8f39:2b3d]:55691->[2406:da1a:e91:9302:6bbc:cc3d:8e60:4a99]:443: wsarecv: An established connection was aborted by the software in your host machine."
+t=2025-12-20T14:30:31+0530 lvl=eror msg="heartbeat timeout, terminating session" obj=tunnels.session obj=csess id=a0d1178aa02f clientid=b71c239c9f754da9460c5fc9b5196b7f
+t=2025-12-20T14:30:39+0530 lvl=info msg="client session established" obj=tunnels.session
+t=2025-12-20T14:30:39+0530 lvl=info msg="tunnel session started" obj=tunnels.session
+t=2025-12-20T14:36:43+0530 lvl=info msg="join connections" obj=join id=f20637b70f23 l=[::1]:3000 r=[2406:b400:72:1009:2c2e:c761:8f39:2b3d]:63394
+t=2025-12-20T14:39:54+0530 lvl=info msg="join connections" obj=join id=73275fd1f022 l=[::1]:3000 r=[2406:b400:72:1009:2c2e:c761:8f39:2b3d]:57758
+t=2025-12-20T14:41:01+0530 lvl=info msg="join connections" obj=join id=3850c95ff808 l=[::1]:3000 r=[2406:b400:72:1009:2c2e:c761:8f39:2b3d]:62571
+t=2025-12-20T14:43:25+0530 lvl=info msg=start pg=/api/tunnels id=515334f381bc334b
+t=2025-12-20T14:43:25+0530 lvl=info msg=end pg=/api/tunnels id=515334f381bc334b status=200 dur=2.0971ms
+t=2025-12-20T14:46:17+0530 lvl=info msg=start pg=/api/tunnels id=02453271015a8c24
+t=2025-12-20T14:46:17+0530 lvl=info msg=end pg=/api/tunnels id=02453271015a8c24 status=200 dur=6.7629ms
+t=2025-12-20T14:46:17+0530 lvl=info msg=start pg=/favicon.ico id=a6f903b1d6a38038
+t=2025-12-20T14:46:17+0530 lvl=warn msg="Not Found" pg=/favicon.ico id=a6f903b1d6a38038 path=/favicon.ico
+t=2025-12-20T14:46:17+0530 lvl=info msg=end pg=/favicon.ico id=a6f903b1d6a38038 status=404 dur=1.5543ms
+t=2025-12-20T14:47:53+0530 lvl=info msg="join connections" obj=join id=f567b191d754 l=[::1]:3000 r=[2406:b400:72:1009:2c2e:c761:8f39:2b3d]:52192
+t=2025-12-20T14:48:30+0530 lvl=info msg="join connections" obj=join id=46379efc807e l=[::1]:3000 r=[2406:b400:72:1009:2c2e:c761:8f39:2b3d]:49764
+t=2025-12-20T14:48:30+0530 lvl=info msg="join connections" obj=join id=d51bbb6b30ad l=[::1]:3000 r=[2406:b400:72:1009:2c2e:c761:8f39:2b3d]:49768
+t=2025-12-20T16:24:21+0530 lvl=eror msg="session closed, starting reconnect loop" obj=tunnels.session obj=csess id=8d9c13359948 err="write tcp [2406:b400:72:1009:2c2e:c761:8f39:2b3d]:58990->[2406:da1a:e91:9301:9c2d:4430:c87b:ee44]:443: wsasend: An existing connection was forcibly closed by the remote host."
+t=2025-12-20T16:24:23+0530 lvl=info msg="client session established" obj=tunnels.session
+t=2025-12-20T16:24:23+0530 lvl=info msg="tunnel session started" obj=tunnels.session
+t=2025-12-20T16:24:34+0530 lvl=eror msg="heartbeat timeout, terminating session" obj=tunnels.session obj=csess id=a8df04a97f5e clientid=b71c239c9f754da9460c5fc9b5196b7f
