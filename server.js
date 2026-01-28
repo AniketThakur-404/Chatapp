@@ -9,6 +9,13 @@ const bot = new WhatsAppCarProtectionBot();
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'CarBot2025';
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const IS_VERCEL = process.env.VERCEL === '1';
+const FORCE_DB = (process.env.FORCE_DB || '').toLowerCase().trim() === 'true';
+const SKIP_DB =
+  !FORCE_DB &&
+  ((process.env.SKIP_DB || '').toLowerCase().trim() === 'true' || IS_VERCEL);
+const SKIP_DB_INIT = (process.env.SKIP_DB_INIT || '').toLowerCase().trim() === 'true';
+const DB_OP_TIMEOUT_MS = parseInt(process.env.DB_OP_TIMEOUT_MS || '5000', 10);
 const DEFAULT_TEMPLATE_RECIPIENT = process.env.DEFAULT_TEMPLATE_RECIPIENT || '919910762692';
 const DEFAULT_TEMPLATE_NAME = process.env.DEFAULT_TEMPLATE_NAME;
 const DEFAULT_TEMPLATE_LANGUAGE = process.env.DEFAULT_TEMPLATE_LANGUAGE || 'en_US';
@@ -25,6 +32,18 @@ function parseTemplateComponents(raw) {
   }
 }
 
+async function withTimeout(promise, ms, label) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 // ====================================================
 // ✅ 1. DATABASE SETUP (NeonDB PostgreSQL via pg driver)
 // ====================================================
@@ -34,8 +53,12 @@ const { initializeDatabase, disconnectDatabase } = require('./initDatabase');
 // Initialize database and create tables
 async function startServer() {
   try {
-    // Initialize database and create all tables
-    await initializeDatabase();
+    if (!SKIP_DB && !SKIP_DB_INIT) {
+      // Initialize database and create all tables
+      await initializeDatabase();
+    } else {
+      console.log('SKIP_DB enabled, skipping database initialization.');
+    }
 
     // Start the Express server after database is ready
     const PORT = process.env.PORT || 3000;
@@ -130,35 +153,6 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`📩 Incoming from ${senderId}: ${messageText}`);
 
-    // ====================================================
-    // 🧠 DATABASE INTEGRATION START
-    // ====================================================
-    let user = await prisma.user.findUnique({ where: { phone_number: senderId } });
-    if (!user) {
-      user = await prisma.user.create({ data: { phone_number: senderId } });
-    }
-
-    let session = await prisma.session.findFirst({
-      where: { userId: user.id },
-    });
-    if (!session) {
-      session = await prisma.session.create({
-        data: {
-          userId: user.id,
-          current_step: 'welcome',
-        },
-      });
-    }
-
-    await prisma.message.create({
-      data: {
-        sessionId: session.id,
-        sender: 'user',
-        message_text: messageText,
-      },
-    });
-    // ====================================================
-
     // Handle numeric reply fallback
     if (/^\d+$/.test(messageText.trim())) {
       const num = parseInt(messageText.trim());
@@ -170,46 +164,114 @@ app.post('/webhook', async (req, res) => {
     }
 
     // 🤖 Process message with bot
-    const botResponse = bot.processMessage(senderId, messageText, user.name);
+    const botResponse = bot.processMessage(senderId, messageText, null);
 
-    // Save bot response in DB
-    await prisma.message.create({
-      data: {
-        sessionId: session.id,
-        sender: 'bot',
-        message_text: botResponse.text,
-      },
-    });
-
-    // Update session step & data
-    const liveSession = bot.getSession(senderId);
-
-    // If name was collected, save it to the user record
-    if (liveSession?.user_name && liveSession?.name_collected && !user.name) {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { name: liveSession.user_name }
-      });
-      console.log(`✅ Saved user name: ${liveSession.user_name} for ${senderId}`);
+    // Send WhatsApp message first (do not block on DB)
+    try {
+      console.log(`📤 Attempting to send WhatsApp message to ${senderId}`);
+      await sendWhatsAppResponse(senderId, botResponse);
+      console.log(`✅ WhatsApp message sent successfully to ${senderId}`);
+    } catch (sendError) {
+      console.error('❌ WhatsApp send failed:', sendError.response?.data || sendError.message);
+      return;
     }
 
-    await prisma.session.update({
-      where: { id: session.id },
-      data: {
-        current_step: liveSession?.step || 'unknown',
-        selected_package: liveSession?.selected_package || null,
-        location: liveSession?.location || null,
-      },
-    });
-
     // ====================================================
-    // 🧠 DATABASE INTEGRATION END
+    // DATABASE INTEGRATION START (best-effort, after send)
     // ====================================================
+    let user = null;
+    let session = null;
+    if (!SKIP_DB) {
+      try {
+        user = await withTimeout(
+          prisma.user.findUnique({ where: { phone_number: senderId } }),
+          DB_OP_TIMEOUT_MS,
+          'findUnique user'
+        );
+        if (!user) {
+          user = await withTimeout(
+            prisma.user.create({ data: { phone_number: senderId } }),
+            DB_OP_TIMEOUT_MS,
+            'create user'
+          );
+        }
 
-    // Send WhatsApp message
-    console.log(`📤 Attempting to send WhatsApp message to ${senderId}`);
-    await sendWhatsAppResponse(senderId, botResponse);
-    console.log(`✅ WhatsApp message sent successfully to ${senderId}`);
+        session = await withTimeout(
+          prisma.session.findFirst({ where: { userId: user.id } }),
+          DB_OP_TIMEOUT_MS,
+          'findFirst session'
+        );
+        if (!session) {
+          session = await withTimeout(
+            prisma.session.create({
+              data: {
+                userId: user.id,
+                current_step: 'welcome',
+              },
+            }),
+            DB_OP_TIMEOUT_MS,
+            'create session'
+          );
+        }
+
+        await withTimeout(
+          prisma.message.create({
+            data: {
+              sessionId: session.id,
+              sender: 'user',
+              message_text: messageText,
+            },
+          }),
+          DB_OP_TIMEOUT_MS,
+          'create user message'
+        );
+
+        await withTimeout(
+          prisma.message.create({
+            data: {
+              sessionId: session.id,
+              sender: 'bot',
+              message_text: botResponse.text,
+            },
+          }),
+          DB_OP_TIMEOUT_MS,
+          'create bot message'
+        );
+
+        // Update session step & data
+        const liveSession = bot.getSession(senderId);
+
+        if (liveSession?.user_name && liveSession?.name_collected && !user.name) {
+          await withTimeout(
+            prisma.user.update({
+              where: { id: user.id },
+              data: { name: liveSession.user_name }
+            }),
+            DB_OP_TIMEOUT_MS,
+            'update user name'
+          );
+          console.log(`Saved user name: ${liveSession.user_name} for ${senderId}`);
+        }
+
+        await withTimeout(
+          prisma.session.update({
+            where: { id: session.id },
+            data: {
+              current_step: liveSession?.step || 'unknown',
+              selected_package: liveSession?.selected_package || null,
+              location: liveSession?.location || null,
+            },
+          }),
+          DB_OP_TIMEOUT_MS,
+          'update session'
+        );
+      } catch (dbError) {
+        console.error('DB error (continuing):', dbError);
+      }
+    }
+    // ====================================================
+    // DATABASE INTEGRATION END
+    // ====================================================
   } catch (error) {
     console.error('❌ Webhook error:', error);
   }

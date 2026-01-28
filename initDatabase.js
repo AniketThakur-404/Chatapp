@@ -5,7 +5,7 @@ const { Pool } = require('pg');
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
-const skipDbInit = (process.env.SKIP_DB_INIT || '').toLowerCase() === 'true';
+const skipDbInit = (process.env.SKIP_DB_INIT || process.env.SKIP_DB || '').toLowerCase().trim() === 'true';
 
 async function initializeDatabase() {
   try {
