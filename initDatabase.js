@@ -5,14 +5,21 @@ const { Pool } = require('pg');
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
+const skipDbInit = (process.env.SKIP_DB_INIT || '').toLowerCase() === 'true';
 
 async function initializeDatabase() {
   try {
-    console.log('🔄 Initializing NeonDB PostgreSQL database...');
+    if (skipDbInit) {
+      console.log('SKIP_DB_INIT flag is set, skipping database initialization.');
+      await pool.end();
+      return true;
+    }
 
-    // User Table
+    console.log('Initializing NeonDB PostgreSQL database...');
+
+    // ChatUser Table (avoids conflict with existing User table)
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS "User" (
+      CREATE TABLE IF NOT EXISTS "ChatUser" (
         id SERIAL PRIMARY KEY,
         phone_number VARCHAR(255) UNIQUE NOT NULL,
         name VARCHAR(255),
@@ -25,7 +32,7 @@ async function initializeDatabase() {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS "Session" (
         id SERIAL PRIMARY KEY,
-        "userId" INTEGER REFERENCES "User"(id),
+        "userId" INTEGER REFERENCES "ChatUser"(id),
         current_step VARCHAR(255),
         selected_package VARCHAR(255),
         location VARCHAR(255),
@@ -46,15 +53,15 @@ async function initializeDatabase() {
       );
     `);
 
-    console.log('✅ Database tables created successfully!');
-    console.log('   - User');
+    console.log('Database tables created successfully!');
+    console.log('   - ChatUser');
     console.log('   - Session');
     console.log('   - Message');
 
     await pool.end();
     return true;
   } catch (error) {
-    console.error('❌ Database initialization failed:', error);
+    console.error('Database initialization failed:', error);
     throw error;
   }
 }

@@ -8,6 +8,21 @@ const bot = new WhatsAppCarProtectionBot();
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'CarBot2025';
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const DEFAULT_TEMPLATE_RECIPIENT = process.env.DEFAULT_TEMPLATE_RECIPIENT || '919910762692';
+const DEFAULT_TEMPLATE_NAME = process.env.DEFAULT_TEMPLATE_NAME;
+const DEFAULT_TEMPLATE_LANGUAGE = process.env.DEFAULT_TEMPLATE_LANGUAGE || 'en_US';
+const DEFAULT_TEMPLATE_COMPONENTS = parseTemplateComponents(process.env.DEFAULT_TEMPLATE_COMPONENTS);
+
+function parseTemplateComponents(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.warn('Unable to parse DEFAULT_TEMPLATE_COMPONENTS (expecting JSON array):', error.message);
+    return [];
+  }
+}
 
 // ====================================================
 // ✅ 1. DATABASE SETUP (NeonDB PostgreSQL via pg driver)
@@ -207,70 +222,50 @@ function getLastBotMessageWithButtons(session) {
 // ====================================================
 // WhatsApp send message logic (unchanged)
 // ====================================================
-// async function sendWhatsAppResponse(to, response) {
-//   const url = `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`;
-//   const headers = {
-//     Authorization: `Bearer ${ACCESS_TOKEN}`,
-//     'Content-Type': 'application/json',
-//   };
+function buildInteractiveRows(buttons) {
+  return buttons.map((button, index) => {
+    const fullText = button.trim();
+    let title = fullText;
+    let description = '';
 
-//   let data;
-//   if (response.buttons && response.buttons.length > 0) {
-//     if (response.buttons.length <= 10) {
-//       data = {
-//         messaging_product: 'whatsapp',
-//         recipient_type: 'individual',
-//         to: to,
-//         type: 'interactive',
-//         interactive: {
-//           type: 'list',
-//           header: { type: 'text', text: 'Select an option' },
-//           body: { text: response.text },
-//           action: {
-//             button: 'View Options',
-//             sections: [
-//               {
-//                 title: 'Available Options',
-//                 rows: response.buttons.map((b, i) => ({
-//                   id: `opt_${i}_${Date.now()}`,
-//                   title: b.slice(0, 24),
-//                   description: b.slice(24, 96),
-//                 })),
-//               },
-//             ],
-//           },
-//         },
-//       };
-//     } else {
-//       let text = response.text + '\n\n*Reply with number:*\n';
-//       response.buttons.forEach((b, i) => (text += `\n${i + 1}. ${b}`));
-//       data = {
-//         messaging_product: 'whatsapp',
-//         to: to,
-//         type: 'text',
-//         text: { preview_url: false, body: text },
-//       };
-//     }
-//   } else {
-//     data = {
-//       messaging_product: 'whatsapp',
-//       to: to,
-//       type: 'text',
-//       text: { preview_url: false, body: response.text },
-//     };
-//   }
+    const parenMatch = fullText.match(/^(..+?)(\(.+\))$/);
+    if (parenMatch) {
+      const mainTitle = parenMatch[1].trim();
+      const descText = parenMatch[2].trim();
+      if (mainTitle.length <= 24) {
+        title = mainTitle;
+        description = descText.substring(0, 72);
+      } else {
+        title = mainTitle.substring(0, 24);
+        description = (mainTitle.substring(24) + ' ' + descText).substring(0, 72).trim();
+      }
+    } else {
+      if (fullText.length <= 24) {
+        title = fullText;
+      } else {
+        let breakIndex = 24;
+        for (let i = 24; i >= 18; i--) {
+          if (fullText[i] === " " || fullText[i] === "-" || fullText[i] === "/") {
+            breakIndex = i;
+            break;
+          }
+        }
+        title = fullText.substring(0, breakIndex).trim();
+        description = fullText.substring(breakIndex).trim().substring(0, 72);
+      }
+    }
 
-//   try {
-//     console.log('📤 Sending WhatsApp:', JSON.stringify(data, null, 2));
-//     await axios.post(url, data, { headers, timeout: 30000 });
-//     console.log('✅ Sent successfully to', to);
-//   } catch (err) {
-//     console.error('❌ Send error:', err.response?.data || err.message);
-//   }
-// }
+    return {
+      id: `option_${index}_${Date.now()}`,
+      title,
+      description,
+    };
+  });
+}
 async function sendWhatsAppResponse(to, response) {
-  console.log(`🔍 sendWhatsAppResponse called for: ${to}`);
-  console.log(`📋 Response type: ${response.buttons ? 'with buttons' : 'text only'}`);
+  if (!ACCESS_TOKEN || !PHONE_NUMBER_ID) {
+    throw new Error('Missing WhatsApp credentials (set ACCESS_TOKEN and PHONE_NUMBER_ID)');
+  }
 
   const url = `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`;
   const headers = {
@@ -278,107 +273,49 @@ async function sendWhatsAppResponse(to, response) {
     'Content-Type': 'application/json',
   };
 
-  console.log(`🌐 WhatsApp API URL: ${url}`);
-  console.log(`🔑 Using PHONE_NUMBER_ID: ${PHONE_NUMBER_ID}`);
-
+  const hasButtons = Array.isArray(response?.buttons) && response.buttons.length > 0;
   let data;
 
-  if (response.buttons && response.buttons.length > 0) {
-    if (response.buttons.length <= 10) {
-      data = {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: to,
-        type: 'interactive',
-        interactive: {
-          type: 'list',
-          header: {
-            type: 'text',
-            text: 'Select an option',
-          },
-          body: {
-            text: response.text,
-          },
-          action: {
-            button: 'View Options',
-            sections: [
-              {
-                title: 'Available Options',
-                rows: response.buttons.map((button, index) => {
-                  const fullText = button.trim();
-                  let title, description;
-
-                  // Smart parsing: detect if text has parentheses for description
-                  const parenMatch = fullText.match(/^(.+?)(\(.+\))$/);
-
-                  if (parenMatch) {
-                    // Text has format: "Main Title(Description)"
-                    const mainTitle = parenMatch[1].trim();
-                    const descText = parenMatch[2].trim();
-
-                    // Ensure title fits in 24 char limit
-                    if (mainTitle.length <= 24) {
-                      title = mainTitle;
-                      description = descText.substring(0, 72); // WhatsApp description limit
-                    } else {
-                      // Title too long, truncate at 24 and move rest to description
-                      title = mainTitle.substring(0, 24);
-                      description = (mainTitle.substring(24) + ' ' + descText).substring(0, 72);
-                    }
-                  } else {
-                    // No parentheses detected - use simple split
-                    if (fullText.length <= 24) {
-                      title = fullText;
-                      description = '';
-                    } else {
-                      // Find natural break point near char 24
-                      let breakIndex = 24;
-
-                      // Look for space, dash, or slash near the 24-char mark
-                      for (let i = 24; i >= 18; i--) {
-                        if (fullText[i] === ' ' || fullText[i] === '-' || fullText[i] === '/') {
-                          breakIndex = i;
-                          break;
-                        }
-                      }
-
-                      title = fullText.substring(0, breakIndex).trim();
-                      description = fullText.substring(breakIndex).trim().substring(0, 72);
-                    }
-                  }
-
-                  return {
-                    id: `option_${index}_${Date.now()}`,
-                    title: title,
-                    description: description,
-                  };
-                }),
-              },
-            ],
-          },
+  if (hasButtons && response.buttons.length <= 10) {
+    data = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'list',
+        header: { type: 'text', text: 'Select an option' },
+        body: { text: response.text },
+        action: {
+          button: 'View Options',
+          sections: [
+            {
+              title: 'Available Options',
+              rows: buildInteractiveRows(response.buttons),
+            },
+          ],
         },
-      };
-    } else {
-      // For more than 10 buttons, use numbered text format
-      let textWithButtons = response.text + '\n\n*Reply with number:*\n';
-      response.buttons.forEach((button, index) => {
-        textWithButtons += `\n${index + 1}. ${button}`;
-      });
-
-      data = {
-        messaging_product: 'whatsapp',
-        to: to,
-        type: 'text',
-        text: {
-          preview_url: false,
-          body: textWithButtons,
-        },
-      };
-    }
+      },
+    };
+  } else if (hasButtons) {
+    let textWithButtons = `${response.text}\n\n*Reply with number:*\n`;
+    response.buttons.forEach((button, index) => {
+      textWithButtons += `
+${index + 1}. ${button}`;
+    });
+    data = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'text',
+      text: {
+        preview_url: false,
+        body: textWithButtons,
+      },
+    };
   } else {
     data = {
       messaging_product: 'whatsapp',
-      to: to,
+      to,
       type: 'text',
       text: {
         preview_url: false,
@@ -388,52 +325,93 @@ async function sendWhatsAppResponse(to, response) {
   }
 
   try {
-    console.log('📤 Sending WhatsApp message:', JSON.stringify(data, null, 2));
-
-    const config = {
-      headers,
-      timeout: 30000,
-    };
-
-    const apiResponse = await axios.post(url, data, config);
-    console.log('✅ Message sent successfully to', to);
+    console.log('Sending WhatsApp message to', to);
+    const apiResponse = await axios.post(url, data, { headers, timeout: 30000 });
+    console.log('Message sent successfully to', to);
     return apiResponse.data;
   } catch (error) {
-    console.error('❌ Error sending message:', error.response ? error.response.data : error.message);
-
-    if (error.response) {
-      console.error('Response status:', error.response.status);
-      console.error('Response headers:', error.response.headers);
-    }
-
-    // Fallback to simple text if interactive message fails
+    console.error('Error sending WhatsApp message:', error.response ? error.response.data : error.message);
     if (data.type === 'interactive') {
-      console.log('🔄 Attempting fallback to simple text...');
       try {
-        let fallbackText = response.text + '\n\n*Available options:*\n';
+        let fallbackText = `${response.text}\n\n*Available options:*\n`;
         response.buttons.forEach((button, index) => {
-          fallbackText += `\n${index + 1}. ${button}`;
+          fallbackText += `
+${index + 1}. ${button}`;
         });
         fallbackText += '\n\nPlease type the number of your choice.';
-
         const fallbackData = {
           messaging_product: 'whatsapp',
-          to: to,
+          to,
           type: 'text',
           text: {
             preview_url: false,
             body: fallbackText,
           },
         };
-
         const fallbackResponse = await axios.post(url, fallbackData, { headers, timeout: 10000 });
-        console.log('✅ Fallback message sent successfully');
+        console.log('Fallback message sent successfully to', to);
         return fallbackResponse.data;
       } catch (fallbackError) {
-        console.error('❌ Fallback also failed:', fallbackError.message);
+        console.error('Fallback attempt failed:', fallbackError.response ? fallbackError.response.data : fallbackError.message);
       }
     }
+    throw error;
+  }
+}
 
+
+async function sendWhatsAppTemplate(to, templatePayload) {
+  if (!ACCESS_TOKEN || !PHONE_NUMBER_ID) {
+    throw new Error('Missing WhatsApp credentials (set ACCESS_TOKEN and PHONE_NUMBER_ID)');
+  }
+  if (!templatePayload?.name) {
+    throw new Error('Template name is required');
+  }
+
+  const languageCode =
+    typeof templatePayload.language === 'string'
+      ? templatePayload.language
+      : templatePayload.language?.code || templatePayload.language_code || DEFAULT_TEMPLATE_LANGUAGE;
+
+  const components =
+    Array.isArray(templatePayload.components) && templatePayload.components.length
+      ? templatePayload.components
+      : DEFAULT_TEMPLATE_COMPONENTS;
+
+  const payload = {
+    name: templatePayload.name,
+    language: { code: languageCode },
+    components,
+  };
+
+  const url = `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`;
+  const headers = {
+    Authorization: `Bearer ${ACCESS_TOKEN}`,
+    'Content-Type': 'application/json',
+  };
+
+  console.log('sendWhatsAppTemplate called for', to, 'template:', payload.name);
+
+  try {
+    const apiResponse = await axios.post(
+      url,
+      {
+        messaging_product: 'whatsapp',
+        to,
+        recipient_type: 'individual',
+        type: 'template',
+        template: payload,
+      },
+      { headers, timeout: 30000 }
+    );
+    console.log('Template message sent successfully to', to);
+    return apiResponse.data;
+  } catch (error) {
+    console.error('Template send failed:', error.response?.data || error.message);
+    if (error.response) {
+      console.error('Response status:', error.response.status);
+      console.error('Response headers:', error.response.headers);
+    }
     throw error;
   }
 }
@@ -468,6 +446,36 @@ app.post('/test-whatsapp', async (req, res) => {
     res.status(500).json({
       error: 'WhatsApp API test failed',
       details: error.message
+    });
+  }
+});
+
+app.post('/send-template', async (req, res) => {
+  try {
+    const { phone_number } = req.body;
+    const targetPhone = phone_number || DEFAULT_TEMPLATE_RECIPIENT;
+    const templateInput = req.body.template || {};
+    const templateName = templateInput.name || DEFAULT_TEMPLATE_NAME;
+
+    if (!templateName) {
+      return res.status(400).json({
+        error: 'Template name is required. Provide template.name in the request body or set DEFAULT_TEMPLATE_NAME in .env.',
+      });
+    }
+
+    const templatePayload = {
+      name: templateName,
+      language: templateInput.language || templateInput.language_code,
+      components: templateInput.components,
+    };
+
+    const result = await sendWhatsAppTemplate(targetPhone, templatePayload);
+    res.json({ success: true, targetPhone, result });
+  } catch (error) {
+    console.error('Template send endpoint failed:', error);
+    res.status(500).json({
+      error: 'Template send failed',
+      details: error.response?.data || error.message,
     });
   }
 });

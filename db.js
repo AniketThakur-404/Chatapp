@@ -24,21 +24,21 @@ const db = {
   user: {
     findUnique: async ({ where }) => {
       const result = await pool.query(
-        'SELECT * FROM "User" WHERE phone_number = $1',
+        'SELECT * FROM "ChatUser" WHERE phone_number = $1',
         [where.phone_number]
       );
       return result.rows[0] || null;
     },
     create: async ({ data }) => {
       const result = await pool.query(
-        'INSERT INTO "User" (phone_number, name, "createdAt", "updatedAt") VALUES ($1, $2, NOW(), NOW()) RETURNING *',
+        'INSERT INTO "ChatUser" (phone_number, name, "createdAt", "updatedAt") VALUES ($1, $2, NOW(), NOW()) RETURNING *',
         [data.phone_number, data.name || null]
       );
       return result.rows[0];
     },
     update: async ({ where, data }) => {
       const result = await pool.query(
-        'UPDATE "User" SET name = $1, "updatedAt" = NOW() WHERE id = $2 RETURNING *',
+        'UPDATE "ChatUser" SET name = $1, "updatedAt" = NOW() WHERE id = $2 RETURNING *',
         [data.name, where.id]
       );
       return result.rows[0];

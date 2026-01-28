@@ -14,7 +14,7 @@ async function checkDatabase() {
         const now = await pool.query('SELECT NOW()');
         console.log('✅ Connected! Server time:', now.rows[0].now);
 
-        const users = await pool.query('SELECT COUNT(*) FROM "User"');
+        const users = await pool.query('SELECT COUNT(*) FROM "ChatUser"');
         const sessions = await pool.query('SELECT COUNT(*) FROM "Session"');
         const messages = await pool.query('SELECT COUNT(*) FROM "Message"');
 
@@ -24,7 +24,7 @@ async function checkDatabase() {
         console.log('Total Messages:', messages.rows[0].count);
 
         console.log('\n=== Recent Users (Top 5) ===');
-        const recentUsers = await pool.query('SELECT * FROM "User" ORDER BY "createdAt" DESC LIMIT 5');
+        const recentUsers = await pool.query('SELECT * FROM "ChatUser" ORDER BY "createdAt" DESC LIMIT 5');
         console.log(JSON.stringify(recentUsers.rows, null, 2));
 
         console.log('\n=== Recent Messages (Top 5) ===');
