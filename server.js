@@ -6,9 +6,9 @@ const app = express();
 const bot = new WhatsAppCarProtectionBot();
 
 // WhatsApp Configuration from environment variables
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'CarBot2025';
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const VERIFY_TOKEN = (process.env.VERIFY_TOKEN || 'CarBot2025').trim();
+const ACCESS_TOKEN = (process.env.ACCESS_TOKEN || '').trim();
+const PHONE_NUMBER_ID = (process.env.PHONE_NUMBER_ID || '').trim();
 const IS_VERCEL = process.env.VERCEL === '1';
 const FORCE_DB = (process.env.FORCE_DB || '').toLowerCase().trim() === 'true';
 const SKIP_DB =
@@ -623,4 +623,8 @@ app.use((err, req, res, next) => {
 });
 
 // Start the server with database initialization
-startServer();
+if (IS_VERCEL) {
+  module.exports = app;
+} else {
+  startServer();
+}
