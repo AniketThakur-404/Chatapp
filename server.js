@@ -44,6 +44,39 @@ async function withTimeout(promise, ms, label) {
   }
 }
 
+function extractMessageText(message) {
+  if (!message) return '';
+
+  if (message.type === 'text' && message.text?.body) {
+    return message.text.body;
+  }
+
+  if (message.type === 'interactive' && message.interactive) {
+    if (message.interactive.type === 'button_reply') {
+      return (
+        message.interactive.button_reply?.title ||
+        message.interactive.button_reply?.id ||
+        ''
+      );
+    }
+    if (message.interactive.type === 'list_reply') {
+      return (
+        message.interactive.list_reply?.title ||
+        message.interactive.list_reply?.id ||
+        ''
+      );
+    }
+  }
+
+  if (message.button?.text) return message.button.text;
+  if (message.list_reply?.title) return message.list_reply.title;
+  if (message.text?.body) return message.text.body;
+  if (typeof message.text === 'string') return message.text;
+  if (message.caption) return message.caption;
+
+  return '';
+}
+
 // ====================================================
 // ✅ 1. DATABASE SETUP (NeonDB PostgreSQL via pg driver)
 // ====================================================
@@ -141,15 +174,11 @@ app.post('/webhook', async (req, res) => {
     }
 
     const senderId = message.from;
-    let messageText = '';
-
-    if (message.type === 'text') messageText = message.text.body;
-    else if (message.type === 'interactive') {
-      if (message.interactive.type === 'button_reply')
-        messageText = message.interactive.button_reply.title;
-      else if (message.interactive.type === 'list_reply')
-        messageText = message.interactive.list_reply.title;
-    } else return;
+    const messageText = extractMessageText(message);
+    if (!messageText) {
+      console.log('⚠️ Unsupported or empty message payload:', message.type);
+      return;
+    }
 
     console.log(`📩 Incoming from ${senderId}: ${messageText}`);
 
