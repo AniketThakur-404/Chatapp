@@ -361,8 +361,7 @@ class WhatsAppCarProtectionBot {
     }
 
     handleGreetingCheck(message, session) {
-        const hasAnyInput = this.normalizeForMatch(message).length > 0;
-        if (this.isGreeting(message) || hasAnyInput) {
+        if (this.isGreeting(message)) {
             session.step = 'name_collection';
             return {
                 text: `Hello! Welcome to UNLAYR 👋\n\nI'm your digital concierge, here to help you craft the perfect protection plan for your vehicle.\n\nTo get started, may I please have your name?`,
