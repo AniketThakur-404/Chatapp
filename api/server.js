@@ -10,6 +10,57 @@ const bot = new WhatsAppCarProtectionBot();
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || 'CarBot2025';
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const IS_VERCEL = process.env.VERCEL === '1';
+const FORCE_DB = (process.env.FORCE_DB || '').toLowerCase().trim() === 'true';
+const SKIP_DB =
+    !FORCE_DB &&
+    ((process.env.SKIP_DB || '').toLowerCase().trim() === 'true' || IS_VERCEL);
+const DB_OP_TIMEOUT_MS = parseInt(process.env.DB_OP_TIMEOUT_MS || '5000', 10);
+
+async function withTimeout(promise, ms, label) {
+    let timeoutId;
+    const timeout = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    });
+    try {
+        return await Promise.race([promise, timeout]);
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+function extractMessageText(message) {
+    if (!message) return '';
+
+    if (message.type === 'text' && message.text?.body) {
+        return message.text.body;
+    }
+
+    if (message.type === 'interactive' && message.interactive) {
+        if (message.interactive.type === 'button_reply') {
+            return (
+                message.interactive.button_reply?.title ||
+                message.interactive.button_reply?.id ||
+                ''
+            );
+        }
+        if (message.interactive.type === 'list_reply') {
+            return (
+                message.interactive.list_reply?.title ||
+                message.interactive.list_reply?.id ||
+                ''
+            );
+        }
+    }
+
+    if (message.button?.text) return message.button.text;
+    if (message.list_reply?.title) return message.list_reply.title;
+    if (message.text?.body) return message.text.body;
+    if (typeof message.text === 'string') return message.text;
+    if (message.caption) return message.caption;
+
+    return '';
+}
 
 // Database setup
 const prisma = require('../db');
@@ -34,10 +85,10 @@ app.get('/webhook', (req, res) => {
     const challenge = req.query['hub.challenge'];
 
     if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-        console.log('✅ Webhook verified successfully!');
+        console.log('Webhook verified successfully!');
         res.status(200).send(challenge);
     } else {
-        console.log('❌ Webhook verification failed');
+        console.log('Webhook verification failed');
         res.status(403).send('Verification failed');
     }
 });
@@ -46,7 +97,7 @@ app.get('/webhook', (req, res) => {
 app.post('/webhook', async (req, res) => {
     try {
         const body = req.body;
-        console.log('🔔 Webhook POST received');
+        console.log('Webhook POST received');
         res.status(200).json({ status: 'received' });
 
         if (body.object !== 'whatsapp_business_account') return;
@@ -57,65 +108,114 @@ app.post('/webhook', async (req, res) => {
         if (!message) return;
 
         const senderId = message.from;
-        let messageText = '';
-
-        if (message.type === 'text') messageText = message.text.body;
-        else if (message.type === 'interactive') {
-            if (message.interactive.type === 'button_reply')
-                messageText = message.interactive.button_reply.title;
-            else if (message.interactive.type === 'list_reply')
-                messageText = message.interactive.list_reply.title;
-        } else return;
-
-        console.log(`📩 Incoming from ${senderId}: ${messageText}`);
-
-        // Database Integration
-        let user = await prisma.user.findUnique({ where: { phone_number: senderId } });
-        if (!user) {
-            user = await prisma.user.create({ data: { phone_number: senderId } });
+        const messageText = extractMessageText(message);
+        if (!messageText) {
+            console.log('Unsupported or empty message payload:', message.type);
+            return;
         }
 
-        let session = await prisma.session.findFirst({ where: { userId: user.id } });
-        if (!session) {
-            session = await prisma.session.create({
-                data: { userId: user.id, current_step: 'welcome' },
-            });
-        }
+        console.log(`Incoming from ${senderId}: ${messageText}`);
 
-        await prisma.message.create({
-            data: { sessionId: session.id, sender: 'user', message_text: messageText },
-        });
+        let user = null;
+        let session = null;
+        let existingUserName = null;
+        try {
+            user = await withTimeout(
+                prisma.user.findUnique({ where: { phone_number: senderId } }),
+                DB_OP_TIMEOUT_MS,
+                'findUnique user'
+            );
+            existingUserName = user?.name || null;
+        } catch (dbError) {
+            console.error('DB lookup failed (continuing):', dbError.message || dbError);
+        }
 
         // Process message with bot
-        const botResponse = bot.processMessage(senderId, messageText, user.name);
+        const botResponse = bot.processMessage(senderId, messageText, existingUserName);
 
-        // Save bot response
-        await prisma.message.create({
-            data: { sessionId: session.id, sender: 'bot', message_text: botResponse.text },
-        });
-
-        // Update session
-        const liveSession = bot.getSession(senderId);
-        if (liveSession?.user_name && liveSession?.name_collected && !user.name) {
-            await prisma.user.update({
-                where: { id: user.id },
-                data: { name: liveSession.user_name }
-            });
+        // Send WhatsApp response first (do not block on DB)
+        try {
+            await sendWhatsAppResponse(senderId, botResponse);
+        } catch (sendError) {
+            console.error('WhatsApp send failed:', sendError.response?.data || sendError.message);
+            return;
         }
 
-        await prisma.session.update({
-            where: { id: session.id },
-            data: {
-                current_step: liveSession?.step || 'unknown',
-                selected_package: liveSession?.selected_package || null,
-                location: liveSession?.location || null,
-            },
-        });
+        // Database Integration (best-effort, after send)
+        if (SKIP_DB) {
+            return;
+        }
 
-        // Send WhatsApp response
-        await sendWhatsAppResponse(senderId, botResponse);
+        try {
+            if (!user) {
+                user = await withTimeout(
+                    prisma.user.create({ data: { phone_number: senderId } }),
+                    DB_OP_TIMEOUT_MS,
+                    'create user'
+                );
+            }
+
+            session = await withTimeout(
+                prisma.session.findFirst({ where: { userId: user.id } }),
+                DB_OP_TIMEOUT_MS,
+                'findFirst session'
+            );
+            if (!session) {
+                session = await withTimeout(
+                    prisma.session.create({
+                        data: { userId: user.id, current_step: 'welcome' },
+                    }),
+                    DB_OP_TIMEOUT_MS,
+                    'create session'
+                );
+            }
+
+            await withTimeout(
+                prisma.message.create({
+                    data: { sessionId: session.id, sender: 'user', message_text: messageText },
+                }),
+                DB_OP_TIMEOUT_MS,
+                'create user message'
+            );
+
+            await withTimeout(
+                prisma.message.create({
+                    data: { sessionId: session.id, sender: 'bot', message_text: botResponse.text },
+                }),
+                DB_OP_TIMEOUT_MS,
+                'create bot message'
+            );
+
+            // Update session
+            const liveSession = bot.getSession(senderId);
+            if (liveSession?.user_name && liveSession?.name_collected && !user.name) {
+                await withTimeout(
+                    prisma.user.update({
+                        where: { id: user.id },
+                        data: { name: liveSession.user_name }
+                    }),
+                    DB_OP_TIMEOUT_MS,
+                    'update user name'
+                );
+            }
+
+            await withTimeout(
+                prisma.session.update({
+                    where: { id: session.id },
+                    data: {
+                        current_step: liveSession?.step || 'unknown',
+                        selected_package: liveSession?.selected_package || null,
+                        location: liveSession?.location || null,
+                    },
+                }),
+                DB_OP_TIMEOUT_MS,
+                'update session'
+            );
+        } catch (dbError) {
+            console.error('DB error (continuing):', dbError.message || dbError);
+        }
     } catch (error) {
-        console.error('❌ Webhook error:', error);
+        console.error('Webhook error:', error);
     }
 });
 
@@ -161,9 +261,9 @@ async function sendWhatsAppResponse(to, response) {
 
     try {
         await axios.post(url, data, { headers, timeout: 30000 });
-        console.log('✅ Sent to', to);
+        console.log('Sent to', to);
     } catch (err) {
-        console.error('❌ Send error:', err.response?.data || err.message);
+        console.error('Send error:', err.response?.data || err.message);
     }
 }
 
@@ -177,3 +277,4 @@ app.post('/test-message', (req, res) => {
 
 // Export for Vercel
 module.exports = app;
+
