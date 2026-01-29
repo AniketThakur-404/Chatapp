@@ -123,6 +123,67 @@ class WhatsAppCarProtectionBot {
         return `\n*All prices are exclusive of 18% GST*`;
     }
 
+    normalizeForMatch(message) {
+        return message
+            .toLowerCase()
+            .replace(/'/g, '')
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim()
+            .replace(/\s+/g, ' ');
+    }
+
+    isGreeting(message) {
+        const normalized = this.normalizeForMatch(message);
+        if (!normalized) return false;
+
+        const phraseGreetings = [
+            'good morning',
+            'good afternoon',
+            'good evening',
+            'good day',
+            'hi there',
+            'hey there',
+            'how are you',
+            'how r u',
+            'whats up',
+            'what s up',
+            'what up',
+            'nice to meet you',
+            'good to see you',
+            'sat sri akaal'
+        ];
+
+        if (phraseGreetings.some(phrase => normalized.includes(phrase))) {
+            return true;
+        }
+
+        const singleWordGreetings = new Set([
+            'hi',
+            'hii',
+            'hiii',
+            'hello',
+            'hey',
+            'hiya',
+            'howdy',
+            'yo',
+            'sup',
+            'wassup',
+            'greetings',
+            'namaste',
+            'salaam',
+            'salam',
+            'bonjour',
+            'hola',
+            'ciao',
+            'ahoy',
+            'start',
+            'begin'
+        ]);
+
+        const tokens = normalized.split(' ');
+        return tokens.some(token => singleWordGreetings.has(token));
+    }
+
 
     calculateDynamicPricing() {
         // Calculate exterior PPF pricing
@@ -298,11 +359,7 @@ class WhatsAppCarProtectionBot {
     }
 
     handleGreetingCheck(message, session) {
-        const normalizedMessage = message.toLowerCase().trim();
-        const greetings = ['hi', 'hello', 'hey', 'hii', 'hiii', 'start', 'begin'];
-
-        // Check if it's a greeting
-        if (greetings.some(greeting => normalizedMessage.includes(greeting))) {
+        if (this.isGreeting(message)) {
             session.step = 'name_collection';
             return {
                 text: `Hello! Welcome to UNLAYR 👋\n\nI'm your digital concierge, here to help you craft the perfect protection plan for your vehicle.\n\nTo get started, may I please have your name?`,
@@ -1357,3 +1414,4 @@ class WhatsAppCarProtectionBot {
 }
 
 module.exports = WhatsAppCarProtectionBot;
+
