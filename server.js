@@ -1,7 +1,10 @@
+console.log("SERVER VERSION: SHEETS DEBUG ENABLED");
+
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const WhatsAppCarProtectionBot = require('./bot');
+const { upsertLeadToSheet } = require('./googleSheetsSync');
 const app = express();
 const bot = new WhatsAppCarProtectionBot();
 
@@ -15,6 +18,7 @@ const SKIP_DB =
   !FORCE_DB &&
   ((process.env.SKIP_DB || '').toLowerCase().trim() === 'true' || IS_VERCEL);
 const SKIP_DB_INIT = (process.env.SKIP_DB_INIT || '').toLowerCase().trim() === 'true';
+let SKIP_DB_RUNTIME = SKIP_DB;
 const DB_OP_TIMEOUT_MS = parseInt(process.env.DB_OP_TIMEOUT_MS || '5000', 10);
 const DEFAULT_TEMPLATE_RECIPIENT = process.env.DEFAULT_TEMPLATE_RECIPIENT || '919910762692';
 const DEFAULT_TEMPLATE_NAME = process.env.DEFAULT_TEMPLATE_NAME;
@@ -77,6 +81,52 @@ function extractMessageText(message) {
   return '';
 }
 
+function buildSessionSnapshot(session) {
+  if (!session) return null;
+  return {
+    step: session.step || null,
+    user_service_type: session.user_service_type || null,
+    vehicle_type: session.vehicle_type || null,
+    ppf_coverage_type: session.ppf_coverage_type || null,
+    selected_package: session.selected_package || null,
+    protection_duration: session.protection_duration || null,
+    user_location: session.user_location || null,
+    preferred_date: session.preferred_date || null,
+    preferred_time: session.preferred_time || null,
+    ppf_interior_addon: Boolean(session.ppf_interior_addon),
+    expert_requested: Boolean(session.expert_requested),
+    user_name: session.user_name || null,
+    name_collected: Boolean(session.name_collected)
+  };
+}
+
+function computeTotalPriceSafe(botInstance, session) {
+  if (!botInstance || !session) return null;
+  const serviceType = session.user_service_type;
+  if (!serviceType) return null;
+
+  const hasValue = (value) =>
+    value !== null && value !== undefined && String(value).trim() !== '';
+
+  if (serviceType === 'PPF') {
+    if (!hasValue(session.selected_package) || !hasValue(session.vehicle_type)) return null;
+  }
+  if (serviceType === 'Graphene') {
+    if (!hasValue(session.selected_package) || !hasValue(session.vehicle_type)) return null;
+  }
+  if (serviceType === 'Ceramic') {
+    if (!hasValue(session.vehicle_type) || !hasValue(session.protection_duration)) return null;
+  }
+
+  try {
+    const totalPrice = botInstance.calculateTotalPrice(session);
+    if (!Number.isFinite(totalPrice) || totalPrice <= 0) return null;
+    return totalPrice;
+  } catch (error) {
+    return null;
+  }
+}
+
 // ====================================================
 // ✅ 1. DATABASE SETUP (NeonDB PostgreSQL via pg driver)
 // ====================================================
@@ -86,14 +136,20 @@ const { initializeDatabase, disconnectDatabase } = require('./initDatabase');
 // Initialize database and create tables
 async function startServer() {
   try {
-    if (!SKIP_DB && !SKIP_DB_INIT) {
-      // Initialize database and create all tables
-      await initializeDatabase();
+    if (!SKIP_DB_RUNTIME && !SKIP_DB_INIT) {
+      try {
+        await initializeDatabase();
+      } catch (dbInitError) {
+        if (FORCE_DB) {
+          throw dbInitError;
+        }
+        console.error('Database initialization failed, starting without DB.', dbInitError);
+        SKIP_DB_RUNTIME = true;
+      }
     } else {
       console.log('SKIP_DB enabled, skipping database initialization.');
     }
 
-    // Start the Express server after database is ready
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => {
       console.log(`🚀 WhatsApp Car Protection Chatbot running on port ${PORT}`);
@@ -166,7 +222,6 @@ app.post('/webhook', async (req, res) => {
     const change = entry?.changes?.[0];
     const message = change?.value?.messages?.[0];
     if (!message) {
-      // Ignore status updates (delivered/read receipts) - this is normal
       if (change?.value?.statuses) {
         console.log('📊 Status update received (ignoring)');
       }
@@ -174,17 +229,18 @@ app.post('/webhook', async (req, res) => {
     }
 
     const senderId = message.from;
-    const messageText = extractMessageText(message);
+    let messageText = extractMessageText(message);
     if (!messageText) {
       console.log('⚠️ Unsupported or empty message payload:', message.type);
       return;
     }
 
     console.log(`📩 Incoming from ${senderId}: ${messageText}`);
+console.log("🟣 WEBHOOK HIT CONFIRMED ✅");
 
-    // Handle numeric reply fallback
+    // Handle numeric reply fallback (currently placeholder)
     if (/^\d+$/.test(messageText.trim())) {
-      const num = parseInt(messageText.trim());
+      const num = parseInt(messageText.trim(), 10);
       const sessionData = bot.getSession(senderId);
       const lastBotMsg = getLastBotMessageWithButtons(sessionData);
       if (lastBotMsg?.buttons && num >= 1 && num <= lastBotMsg.buttons.length) {
@@ -195,22 +251,31 @@ app.post('/webhook', async (req, res) => {
     // 🤖 Process message with bot
     const botResponse = bot.processMessage(senderId, messageText, null);
 
-    // Send WhatsApp message first (do not block on DB)
+    // Send WhatsApp message first
+    console.log("🟡 About to write to Sheet for:", senderId);
+
     try {
       console.log(`📤 Attempting to send WhatsApp message to ${senderId}`);
       await sendWhatsAppResponse(senderId, botResponse);
       console.log(`✅ WhatsApp message sent successfully to ${senderId}`);
+
     } catch (sendError) {
       console.error('❌ WhatsApp send failed:', sendError.response?.data || sendError.message);
+
       return;
     }
+
+    const liveSession = bot.getSession(senderId);
+    const sessionSnapshot = buildSessionSnapshot(liveSession);
+    const now = new Date();
+    const totalPrice = computeTotalPriceSafe(bot, liveSession);
 
     // ====================================================
     // DATABASE INTEGRATION START (best-effort, after send)
     // ====================================================
     let user = null;
     let session = null;
-    if (!SKIP_DB) {
+    if (!SKIP_DB_RUNTIME) {
       try {
         user = await withTimeout(
           prisma.user.findUnique({ where: { phone_number: senderId } }),
@@ -267,9 +332,6 @@ app.post('/webhook', async (req, res) => {
           'create bot message'
         );
 
-        // Update session step & data
-        const liveSession = bot.getSession(senderId);
-
         if (liveSession?.user_name && liveSession?.name_collected && !user.name) {
           await withTimeout(
             prisma.user.update({
@@ -282,13 +344,14 @@ app.post('/webhook', async (req, res) => {
           console.log(`Saved user name: ${liveSession.user_name} for ${senderId}`);
         }
 
-        await withTimeout(
+        session = await withTimeout(
           prisma.session.update({
             where: { id: session.id },
             data: {
               current_step: liveSession?.step || 'unknown',
               selected_package: liveSession?.selected_package || null,
-              location: liveSession?.location || null,
+              location: liveSession?.user_location || liveSession?.location || null,
+              session_data: sessionSnapshot,
             },
           }),
           DB_OP_TIMEOUT_MS,
@@ -301,6 +364,57 @@ app.post('/webhook', async (req, res) => {
     // ====================================================
     // DATABASE INTEGRATION END
     // ====================================================
+console.log("🟡 Reached SHEET section for:", senderId, "TAB:", process.env.GOOGLE_SHEETS_TAB_NAME);
+console.log("🟡 SHEET ENV:", {
+  SPREADSHEET_ID: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+  TAB: process.env.GOOGLE_SHEETS_TAB_NAME,
+  CREDS: process.env.GOOGLE_SERVICE_ACCOUNT_PATH
+});
+
+    // ✅ GOOGLE SHEETS UPSERT (updated logging + remove unused fields)
+    console.log("🟡 ABOUT TO CALL upsertLeadToSheet()", {
+  SPREADSHEET_ID: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+  TAB: process.env.GOOGLE_SHEETS_TAB_NAME,
+  HAS_CREDS_JSON: !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+  HAS_CREDS_B64: !!process.env.GOOGLE_SERVICE_ACCOUNT_B64,
+  HAS_CREDS_PATH: !!process.env.GOOGLE_SERVICE_ACCOUNT_PATH,
+});
+
+    try {
+      const result = await upsertLeadToSheet({
+        phone_number: senderId,
+        name: user?.name || liveSession?.user_name || null,
+        user_id: user?.id || null,
+        session_id: session?.id || null,
+        first_seen: user?.createdAt || null,
+        last_seen: now,
+        current_step: liveSession?.step || session?.current_step || null,
+        user_service_type: liveSession?.user_service_type || null,
+        vehicle_type: liveSession?.vehicle_type || null,
+        ppf_coverage_type: liveSession?.ppf_coverage_type || null,
+        selected_package: liveSession?.selected_package || null,
+        protection_duration: liveSession?.protection_duration || null,
+        ppf_interior_addon: liveSession?.ppf_interior_addon || false,
+        expert_requested: liveSession?.expert_requested || false,
+        location: liveSession?.user_location || liveSession?.location || session?.location || null,
+        preferred_date: liveSession?.preferred_date || null,
+        preferred_time: liveSession?.preferred_time || null,
+        total_price: totalPrice,
+last_message_text: `WEBHOOK_${new Date().toISOString()}_${messageText}`,
+        last_message_at: now,
+      });
+console.log("✅ SHEET UPDATED ✅ RESULT:", result);
+
+      console.log("✅ Sheet upsert success:", result);
+    } catch (sheetError) {
+      console.error("❌ SHEET FAILED ❌", sheetError?.message);
+console.error("❌ FULL ERROR:", sheetError);
+
+      console.error("❌ Sheet sync error FULL:", sheetError);
+  console.error("❌ Sheet sync error MSG:", sheetError?.message);
+  console.error("❌ Sheet sync error DATA:", sheetError?.response?.data);
+    }
+
   } catch (error) {
     console.error('❌ Webhook error:', error);
   }
@@ -354,6 +468,7 @@ function buildInteractiveRows(buttons) {
     };
   });
 }
+
 async function sendWhatsAppResponse(to, response) {
   if (!ACCESS_TOKEN || !PHONE_NUMBER_ID) {
     throw new Error('Missing WhatsApp credentials (set ACCESS_TOKEN and PHONE_NUMBER_ID)');
@@ -392,8 +507,7 @@ async function sendWhatsAppResponse(to, response) {
   } else if (hasButtons) {
     let textWithButtons = `${response.text}\n\n*Reply with number:*\n`;
     response.buttons.forEach((button, index) => {
-      textWithButtons += `
-${index + 1}. ${button}`;
+      textWithButtons += `\n${index + 1}. ${button}`;
     });
     data = {
       messaging_product: 'whatsapp',
@@ -427,8 +541,7 @@ ${index + 1}. ${button}`;
       try {
         let fallbackText = `${response.text}\n\n*Available options:*\n`;
         response.buttons.forEach((button, index) => {
-          fallbackText += `
-${index + 1}. ${button}`;
+          fallbackText += `\n${index + 1}. ${button}`;
         });
         fallbackText += '\n\nPlease type the number of your choice.';
         const fallbackData = {
@@ -450,7 +563,6 @@ ${index + 1}. ${button}`;
     throw error;
   }
 }
-
 
 async function sendWhatsAppTemplate(to, templatePayload) {
   if (!ACCESS_TOKEN || !PHONE_NUMBER_ID) {
@@ -507,11 +619,11 @@ async function sendWhatsAppTemplate(to, templatePayload) {
     throw error;
   }
 }
+
 // ====================================================
 // Test and session endpoints
 // ====================================================
 
-// Test WhatsApp API connection
 app.post('/test-whatsapp', async (req, res) => {
   try {
     const { phone_number } = req.body;
@@ -572,7 +684,7 @@ app.post('/send-template', async (req, res) => {
   }
 });
 
-app.post('/test-message', (req, res) => {
+app.post('/test-message', async (req, res) => {
   try {
     console.log('🧪 TEST ENDPOINT CALLED - This is not a real WhatsApp message!');
     const { userId = 'test-user', message, userName = null } = req.body;
@@ -580,12 +692,47 @@ app.post('/test-message', (req, res) => {
 
     console.log(`🧪 Test message from ${userId}: ${message}`);
     const response = bot.processMessage(userId, message, userName);
+    const sessionData = bot.getSession(userId);
+
+    let sheetSync = null;
+    try {
+      const now = new Date();
+      const totalPrice = computeTotalPriceSafe(bot, sessionData);
+      sheetSync = await upsertLeadToSheet({
+        phone_number: userId,
+        name: userName || sessionData?.user_name || null,
+        user_id: null,
+        session_id: null,
+        first_seen: null,
+        last_seen: now,
+        current_step: sessionData?.step || null,
+        user_service_type: sessionData?.user_service_type || null,
+        vehicle_type: sessionData?.vehicle_type || null,
+        ppf_coverage_type: sessionData?.ppf_coverage_type || null,
+        selected_package: sessionData?.selected_package || null,
+        protection_duration: sessionData?.protection_duration || null,
+        ppf_interior_addon: sessionData?.ppf_interior_addon || false,
+        expert_requested: sessionData?.expert_requested || false,
+        location: sessionData?.user_location || sessionData?.location || null,
+        preferred_date: sessionData?.preferred_date || null,
+        preferred_time: sessionData?.preferred_time || null,
+        total_price: totalPrice,
+        last_message_text: `TEST_${new Date().toISOString()}_${message}`,
+        last_message_at: now,
+      });
+
+      console.log('âœ… Test endpoint sheet sync:', sheetSync);
+    } catch (sheetError) {
+      console.error('âŒ Test endpoint sheet sync error:', sheetError);
+      sheetSync = { error: sheetError?.message || 'Sheet sync failed' };
+    }
 
     res.json({
       userId,
       userMessage: message,
       botResponse: response,
-      sessionData: bot.getSession(userId),
+      sessionData,
+      sheetSync,
       note: 'This was a test call - no WhatsApp message sent'
     });
   } catch (error) {
@@ -622,7 +769,6 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start the server with database initialization
 if (IS_VERCEL) {
   module.exports = app;
 } else {

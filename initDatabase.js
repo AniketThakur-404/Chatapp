@@ -41,6 +41,11 @@ async function initializeDatabase() {
       );
     `);
 
+    await pool.query(`
+      ALTER TABLE "Session"
+      ADD COLUMN IF NOT EXISTS session_data JSONB;
+    `);
+
     // Message Table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS "Message" (

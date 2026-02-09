@@ -1,8 +1,11 @@
 .env
 .env*.local
 .vercel
+service-account.json
 
 /generated/prisma
 node_modules/
 .vercel
 .env*.local
+credentials/
+.env

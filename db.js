@@ -56,15 +56,27 @@ const db = {
     },
     create: async ({ data }) => {
       const result = await pool.query(
-        'INSERT INTO "Session" ("userId", current_step, selected_package, location, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING *',
-        [data.userId, data.current_step || null, data.selected_package || null, data.location || null]
+        'INSERT INTO "Session" ("userId", current_step, selected_package, location, session_data, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) RETURNING *',
+        [
+          data.userId,
+          data.current_step || null,
+          data.selected_package || null,
+          data.location || null,
+          data.session_data || null
+        ]
       );
       return result.rows[0];
     },
     update: async ({ where, data }) => {
       const result = await pool.query(
-        'UPDATE "Session" SET current_step = $1, selected_package = $2, location = $3, "updatedAt" = NOW() WHERE id = $4 RETURNING *',
-        [data.current_step, data.selected_package, data.location, where.id]
+        'UPDATE "Session" SET current_step = $1, selected_package = $2, location = $3, session_data = $4, "updatedAt" = NOW() WHERE id = $5 RETURNING *',
+        [
+          data.current_step,
+          data.selected_package,
+          data.location,
+          data.session_data || null,
+          where.id
+        ]
       );
       return result.rows[0];
     }
