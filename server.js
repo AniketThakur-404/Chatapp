@@ -34,6 +34,10 @@ const WA_INTERACTIVE_BODY_MAX_LEN = Math.max(
   200,
   parseInt(process.env.WA_INTERACTIVE_BODY_MAX_LEN || '900', 10)
 );
+const SHEET_TEXT_MAX_LEN = Math.max(
+  200,
+  parseInt(process.env.SHEET_TEXT_MAX_LEN || '900', 10)
+);
 const WA_WEBHOOK_SEND_TIMEOUT_MS = Math.max(
   2000,
   parseInt(process.env.WA_WEBHOOK_SEND_TIMEOUT_MS || '7000', 10)
@@ -328,6 +332,51 @@ function buildTextWithButtons(baseText, buttons, maxLen) {
   return trimText(combined, maxLen);
 }
 
+function formatSessionSummary(session, botInstance) {
+  if (!session) return "";
+  const parts = [];
+  const step = toTitleCase(session.step);
+  if (step) parts.push(`Step: ${step}`);
+  const service = formatServiceType(session.user_service_type);
+  if (service) parts.push(`Service: ${service}`);
+  const vehicle = formatVehicleType(session.vehicle_type);
+  if (vehicle) parts.push(`Vehicle: ${vehicle}`);
+  const coverage = formatCoverageType(
+    session.ppf_coverage_type,
+    session.ppf_interior_addon
+  );
+  if (coverage) parts.push(`Coverage: ${coverage}`);
+  const packageName = formatPackage(botInstance, session);
+  if (packageName) parts.push(`Package: ${packageName}`);
+  const duration = formatDuration(session.protection_duration);
+  if (duration) parts.push(`Duration: ${duration}`);
+  if (session.user_location) parts.push(`Location: ${session.user_location}`);
+  if (session.preferred_date || session.preferred_time) {
+    const when = [session.preferred_date, session.preferred_time]
+      .filter(Boolean)
+      .join(" at ");
+    parts.push(`Preferred: ${toTitleCase(when)}`);
+  }
+  parts.push(`Expert: ${formatYesNo(session.expert_requested) || "No"}`);
+  if (session.ppf_interior_addon !== undefined) {
+    parts.push(`Interior Addon: ${formatYesNo(session.ppf_interior_addon)}`);
+  }
+  return trimText(parts.join(" | "), SHEET_TEXT_MAX_LEN);
+}
+
+function formatConversationTail(session, maxItems = 6) {
+  if (!session || !Array.isArray(session.conversation_history)) return "";
+  const tail = session.conversation_history.slice(-maxItems);
+  const lines = tail
+    .map((item) => {
+      if (item.user) return `U: ${trimText(item.user, 80)}`;
+      if (item.bot) return `B: ${trimText(item.bot, 80)}`;
+      return "";
+    })
+    .filter(Boolean);
+  return trimText(lines.join(" | "), SHEET_TEXT_MAX_LEN);
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -584,36 +633,6 @@ async function postWithRetry(url, data, headers, label, options = {}) {
   throw lastError;
 }
 
-function buildSessionDump(session) {
-  if (!session) return null;
-  const history = Array.isArray(session.conversation_history)
-    ? session.conversation_history.slice(-6)
-    : [];
-  return {
-    step: session.step || null,
-    user_service_type: session.user_service_type || null,
-    vehicle_type: session.vehicle_type || null,
-    ppf_coverage_type: session.ppf_coverage_type || null,
-    selected_package: session.selected_package || null,
-    protection_duration: session.protection_duration || null,
-    user_location: session.user_location || null,
-    preferred_date: session.preferred_date || null,
-    preferred_time: session.preferred_time || null,
-    ppf_interior_addon: Boolean(session.ppf_interior_addon),
-    expert_requested: Boolean(session.expert_requested),
-    navigation_history: Array.isArray(session.navigation_history)
-      ? session.navigation_history
-      : [],
-    previous_step_data: session.previous_step_data || {},
-    user_name: session.user_name || null,
-    name_collected: Boolean(session.name_collected),
-    conversation_history_count: Array.isArray(session.conversation_history)
-      ? session.conversation_history.length
-      : 0,
-    conversation_history_tail: history,
-  };
-}
-
 function buildSheetLead({
   senderId,
   messageText,
@@ -626,7 +645,6 @@ function buildSheetLead({
   source,
 }) {
   const stepRaw = liveSession?.step || session?.current_step || null;
-  const sessionDump = buildSessionDump(liveSession);
   return {
     phone_number: senderId,
     name: user?.name || liveSession?.user_name || null,
@@ -658,7 +676,8 @@ function buildSheetLead({
     message_source: source || null,
     session_id: session?.id || null,
     user_id: user?.id || null,
-    session_snapshot_json: sessionDump ? JSON.stringify(sessionDump) : null,
+    session_summary_text: formatSessionSummary(liveSession, botInstance),
+    conversation_tail_text: formatConversationTail(liveSession),
   };
 }
 

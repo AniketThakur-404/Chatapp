@@ -31,7 +31,8 @@ const HEADERS = [
   { key: "message_source", label: "Message Source" },
   { key: "session_id", label: "Session ID" },
   { key: "user_id", label: "User ID" },
-  { key: "session_snapshot_json", label: "Session Snapshot (JSON)" },
+  { key: "session_summary_text", label: "Session Summary" },
+  { key: "conversation_tail_text", label: "Recent Messages" },
 ];
 
 const HEADER_LABELS = HEADERS.map((header) => header.label);
