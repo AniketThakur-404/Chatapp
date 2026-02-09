@@ -6,29 +6,48 @@ const { google } = require("googleapis");
 const SPREADSHEET_ID = (process.env.GOOGLE_SHEETS_SPREADSHEET_ID || "").trim();
 const TAB_NAME = (process.env.GOOGLE_SHEETS_TAB_NAME || "Sheet1").trim();
 
-// Keep these headers EXACTLY in this order (A..T)
+// Keep these headers EXACTLY in this order (A..)
 const HEADERS = [
-  "phone_number",
-  "name",
-  "user_id",
-  "session_id",
-  "first_seen",
-  "last_seen",
-  "current_step",
-  "user_service_type",
-  "vehicle_type",
-  "ppf_coverage_type",
-  "selected_package",
-  "protection_duration",
-  "ppf_interior_addon",
-  "expert_requested",
-  "location",
-  "preferred_date",
-  "preferred_time",
-  "total_price",
-  "last_message_text",
-  "last_message_at",
+  { key: "phone_number", label: "Phone" },
+  { key: "name", label: "Name" },
+  { key: "current_step", label: "Current Step" },
+  { key: "service", label: "Service" },
+  { key: "vehicle", label: "Vehicle" },
+  { key: "coverage", label: "Coverage" },
+  { key: "package", label: "Package" },
+  { key: "duration", label: "Duration" },
+  { key: "interior_addon", label: "Interior Addon" },
+  { key: "expert_requested", label: "Expert Requested" },
+  { key: "location", label: "Location" },
+  { key: "preferred_date", label: "Preferred Date" },
+  { key: "preferred_time", label: "Preferred Time" },
+  { key: "total_price_display", label: "Total Price" },
+  { key: "total_price_raw", label: "Total Price (Raw)" },
+  { key: "last_message_text", label: "Last Message" },
+  { key: "last_message_at_ist", label: "Last Message (IST)" },
+  { key: "last_message_at_utc", label: "Last Message (UTC)" },
+  { key: "first_seen_ist", label: "First Seen (IST)" },
+  { key: "last_seen_ist", label: "Last Seen (IST)" },
+  { key: "message_source", label: "Message Source" },
+  { key: "session_id", label: "Session ID" },
+  { key: "user_id", label: "User ID" },
+  { key: "session_snapshot_json", label: "Session Snapshot (JSON)" },
 ];
+
+const HEADER_LABELS = HEADERS.map((header) => header.label);
+
+function getColumnLetter(index) {
+  let result = "";
+  let n = index + 1;
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    result = String.fromCharCode(65 + rem) + result;
+    n = Math.floor((n - 1) / 26);
+  }
+  return result;
+}
+
+const LAST_COLUMN = getColumnLetter(HEADERS.length - 1);
 
 function must(value, envName) {
   if (!value) throw new Error(`Missing environment variable: ${envName}`);
@@ -82,19 +101,24 @@ async function ensureHeaderRow(sheets) {
   // Read first row A1:T1
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${TAB_NAME}!A1:T1`,
+    range: `${TAB_NAME}!A1:${LAST_COLUMN}1`,
   });
 
   const existing =
     res.data.values && res.data.values[0] ? res.data.values[0] : [];
 
-  // If first cell is not "phone_number", assume headers missing/different
-  if (existing.length === 0 || String(existing[0] || "").trim() !== "phone_number") {
+  const normalizedExisting = existing.map((value) => String(value || "").trim());
+  const normalizedExpected = HEADER_LABELS.map((value) => String(value || "").trim());
+  const headersMatch =
+    normalizedExisting.length === normalizedExpected.length &&
+    normalizedExpected.every((value, index) => normalizedExisting[index] === value);
+
+  if (!headersMatch) {
     await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${TAB_NAME}!A1:T1`,
+      range: `${TAB_NAME}!A1:${LAST_COLUMN}1`,
       valueInputOption: "RAW",
-      requestBody: { values: [HEADERS] },
+      requestBody: { values: [HEADER_LABELS] },
     });
   }
 }
@@ -129,13 +153,13 @@ async function upsertLeadToSheet(lead) {
 
   await ensureHeaderRow(sheets);
 
-  const rowValues = HEADERS.map((key) => toSheetValue(lead[key]));
+  const rowValues = HEADERS.map((header) => toSheetValue(lead[header.key]));
   const foundRow = await findRowByPhone(sheets, phone);
 
   if (foundRow > 0) {
     await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${TAB_NAME}!A${foundRow}:T${foundRow}`,
+      range: `${TAB_NAME}!A${foundRow}:${LAST_COLUMN}${foundRow}`,
       valueInputOption: "USER_ENTERED",
       requestBody: { values: [rowValues] },
     });
@@ -144,7 +168,7 @@ async function upsertLeadToSheet(lead) {
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${TAB_NAME}!A:T`,
+    range: `${TAB_NAME}!A:${LAST_COLUMN}`,
     valueInputOption: "USER_ENTERED",
     insertDataOption: "INSERT_ROWS",
     requestBody: { values: [rowValues] },
