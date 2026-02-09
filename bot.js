@@ -229,7 +229,8 @@ class WhatsAppCarProtectionBot {
                 navigation_history: [], // Track navigation steps for "Previous" functionality
                 previous_step_data: {}, // Store data from previous steps
                 user_name: null, // Store user's name
-                name_collected: false // Track if name has been collected
+                name_collected: false, // Track if name has been collected
+                last_bot_buttons: null // Track last bot options for numeric replies
             });
         }
         return this.sessions.get(userId);
@@ -261,7 +262,11 @@ class WhatsAppCarProtectionBot {
             response = this.handleStepBasedFlow(normalizedMessage, session);
         }
 
-        // Add bot response to history
+        // Add bot response to history + store last buttons for numeric reply fallback
+        session.last_bot_buttons =
+            Array.isArray(response.buttons) && response.buttons.length > 0
+                ? response.buttons
+                : null;
         session.conversation_history.push({ bot: response.text, timestamp: new Date() });
 
         return response;

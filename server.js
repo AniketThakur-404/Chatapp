@@ -26,8 +26,18 @@ const WA_API_RETRY_DELAY_MS = parseInt(
   process.env.WA_API_RETRY_DELAY_MS || '400',
   10
 );
+const WA_TEXT_MAX_LEN = Math.max(
+  500,
+  parseInt(process.env.WA_TEXT_MAX_LEN || '3500', 10)
+);
+const WA_INTERACTIVE_BODY_MAX_LEN = Math.max(
+  200,
+  parseInt(process.env.WA_INTERACTIVE_BODY_MAX_LEN || '900', 10)
+);
 const FAST_FAIL_QUEUE_ENABLED =
   (process.env.WA_FAST_FAIL_QUEUE || '').toLowerCase().trim() === 'true';
+const WA_ALLOW_SERVERLESS_QUEUE =
+  (process.env.WA_ALLOW_SERVERLESS_QUEUE || '').toLowerCase().trim() === 'true';
 const WA_FAST_FAIL_MS = parseInt(process.env.WA_FAST_FAIL_MS || '2500', 10);
 const WA_QUEUE_MAX = parseInt(process.env.WA_QUEUE_MAX || '200', 10);
 const WA_QUEUE_RETRY_LIMIT = Math.max(
@@ -42,6 +52,8 @@ const WA_QUEUE_CONCURRENCY = Math.max(
   1,
   parseInt(process.env.WA_QUEUE_CONCURRENCY || '1', 10)
 );
+const WA_QUEUE_ENABLED =
+  FAST_FAIL_QUEUE_ENABLED && (!IS_VERCEL || WA_ALLOW_SERVERLESS_QUEUE);
 const METRICS_MAX_SAMPLES = Math.max(
   50,
   parseInt(process.env.METRICS_MAX_SAMPLES || '500', 10)
@@ -293,6 +305,25 @@ function compactText(value, maxLen = 180) {
   return `${cleaned.slice(0, Math.max(0, maxLen - 3))}...`;
 }
 
+function trimText(value, maxLen) {
+  if (!value) return "";
+  const text = String(value);
+  if (!maxLen || text.length <= maxLen) return text;
+  return `${text.slice(0, Math.max(0, maxLen - 3))}...`;
+}
+
+function buildTextWithButtons(baseText, buttons, maxLen) {
+  const list = buttons
+    .map((button, index) => `\n${index + 1}. ${button}`)
+    .join("");
+  const suffix = `\n\n*Reply with number:*${list}`;
+  const maxBaseLen = Math.max(0, maxLen - suffix.length);
+  const safeBase = trimText(baseText, maxBaseLen);
+  const combined = `${safeBase}${suffix}`.trim();
+  if (combined.length <= maxLen) return combined;
+  return trimText(combined, maxLen);
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -382,9 +413,11 @@ function getMetricsSnapshot() {
       max: WA_QUEUE_MAX,
       retry_limit: WA_QUEUE_RETRY_LIMIT,
       concurrency: WA_QUEUE_CONCURRENCY,
+      enabled: WA_QUEUE_ENABLED,
     },
     config: {
       fast_fail_queue: FAST_FAIL_QUEUE_ENABLED,
+      serverless_queue_allowed: WA_ALLOW_SERVERLESS_QUEUE,
       fast_fail_ms: WA_FAST_FAIL_MS,
       api_timeout_ms: WA_API_TIMEOUT_MS,
       api_retry_count: WA_API_RETRY_COUNT,
@@ -407,6 +440,23 @@ function isRetryableError(error) {
   );
 }
 
+function isOutside24hWindowError(error) {
+  const err = error?.response?.data?.error || {};
+  const subcode = err.error_subcode || err.subcode;
+  const code = err.code;
+  const message = String(err.message || error?.message || '').toLowerCase();
+  return (
+    code === 470 ||
+    subcode === 131047 ||
+    subcode === 131057 ||
+    message.includes('outside the 24 hour') ||
+    message.includes('outside the 24-hour') ||
+    message.includes('requires a template') ||
+    message.includes('message template') ||
+    message.includes('outside the standard messaging window')
+  );
+}
+
 function computeQueueDelay(attempt) {
   const base = Math.max(100, WA_QUEUE_RETRY_BASE_DELAY_MS);
   const delay = base * Math.pow(2, Math.max(0, attempt - 1));
@@ -415,6 +465,13 @@ function computeQueueDelay(attempt) {
 }
 
 function enqueueWaSend(task) {
+  if (!WA_QUEUE_ENABLED) {
+    console.warn('WhatsApp queue disabled; skipping enqueue', {
+      label: task.label,
+      to: task.to,
+    });
+    return false;
+  }
   if (waSendQueue.length >= WA_QUEUE_MAX) {
     console.warn('WhatsApp queue full - dropping message', {
       label: task.label,
@@ -434,7 +491,7 @@ function enqueueWaSend(task) {
 }
 
 function ensureQueueWorker() {
-  if (waQueueIntervalId || !FAST_FAIL_QUEUE_ENABLED) return;
+  if (waQueueIntervalId || !WA_QUEUE_ENABLED) return;
   waQueueIntervalId = setInterval(drainQueue, 500);
   if (typeof waQueueIntervalId.unref === 'function') {
     waQueueIntervalId.unref();
@@ -442,7 +499,7 @@ function ensureQueueWorker() {
 }
 
 function drainQueue() {
-  if (!FAST_FAIL_QUEUE_ENABLED) return;
+  if (!WA_QUEUE_ENABLED) return;
   const now = Date.now();
   while (waQueueRunning < WA_QUEUE_CONCURRENCY) {
     const nextIndex = waSendQueue.findIndex((task) => task.nextRunAt <= now);
@@ -893,6 +950,10 @@ console.error("❌ FULL ERROR:", sheetError);
 
 // Helper - placeholder
 function getLastBotMessageWithButtons(session) {
+  if (!session) return null;
+  if (Array.isArray(session.last_bot_buttons) && session.last_bot_buttons.length > 0) {
+    return { buttons: session.last_bot_buttons };
+  }
   return null;
 }
 
@@ -951,22 +1012,32 @@ async function dispatchWhatsAppSend({ url, headers, data, to, label, fastFail })
       return apiResponse.data;
     } catch (error) {
       if (isRetryableError(error)) {
-        enqueueWaSend({
-          url,
-          headers,
-          data,
-          to,
-          label,
-          attempts: 0,
-          nextRunAt: Date.now(),
-        });
-        console.warn('WhatsApp send queued after fast-fail', {
+        if (WA_QUEUE_ENABLED) {
+          enqueueWaSend({
+            url,
+            headers,
+            data,
+            to,
+            label,
+            attempts: 0,
+            nextRunAt: Date.now(),
+          });
+          console.warn('WhatsApp send queued after fast-fail', {
+            label,
+            to,
+            code: error?.code,
+            status: error?.response?.status,
+          });
+          return { queued: true };
+        }
+        console.warn('Fast-fail hit; queue disabled, retrying inline', {
           label,
           to,
           code: error?.code,
           status: error?.response?.status,
         });
-        return { queued: true };
+        const fallbackResponse = await postWithRetry(url, data, headers, `${label}-fallback`);
+        return fallbackResponse.data;
       }
       throw error;
     }
@@ -990,7 +1061,13 @@ async function sendWhatsAppResponse(to, response, options = {}) {
   const hasButtons = Array.isArray(response?.buttons) && response.buttons.length > 0;
   let data;
 
-  if (hasButtons && response.buttons.length <= 10) {
+  const baseText = trimText(response?.text || '', WA_TEXT_MAX_LEN);
+  const canUseInteractive =
+    hasButtons &&
+    response.buttons.length <= 10 &&
+    baseText.length <= WA_INTERACTIVE_BODY_MAX_LEN;
+
+  if (canUseInteractive) {
     data = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
@@ -999,7 +1076,7 @@ async function sendWhatsAppResponse(to, response, options = {}) {
       interactive: {
         type: 'list',
         header: { type: 'text', text: 'Select an option' },
-        body: { text: response.text },
+        body: { text: baseText },
         action: {
           button: 'View Options',
           sections: [
@@ -1012,10 +1089,7 @@ async function sendWhatsAppResponse(to, response, options = {}) {
       },
     };
   } else if (hasButtons) {
-    let textWithButtons = `${response.text}\n\n*Reply with number:*\n`;
-    response.buttons.forEach((button, index) => {
-      textWithButtons += `\n${index + 1}. ${button}`;
-    });
+    const textWithButtons = buildTextWithButtons(baseText, response.buttons, WA_TEXT_MAX_LEN);
     data = {
       messaging_product: 'whatsapp',
       to,
@@ -1032,7 +1106,7 @@ async function sendWhatsAppResponse(to, response, options = {}) {
       type: 'text',
       text: {
         preview_url: false,
-        body: response.text,
+        body: baseText,
       },
     };
   }
@@ -1050,13 +1124,26 @@ async function sendWhatsAppResponse(to, response, options = {}) {
     console.log('Message send attempted', to, result?.queued ? '(queued)' : '');
     return result;
   } catch (error) {
-    console.error('Error sending WhatsApp message:', error.response ? error.response.data : error.message);
+    const errPayload = error.response ? error.response.data : error.message;
+    console.error('Error sending WhatsApp message:', errPayload);
+    if (isOutside24hWindowError(error)) {
+      console.warn('Outside 24h window - attempting template send');
+      try {
+        return await sendWhatsAppTemplate(to, {
+          name: DEFAULT_TEMPLATE_NAME,
+          language: DEFAULT_TEMPLATE_LANGUAGE,
+        });
+      } catch (templateError) {
+        console.error('Template fallback failed:', templateError.response?.data || templateError.message);
+      }
+    }
     if (data.type === 'interactive') {
       try {
-        let fallbackText = `${response.text}\n\n*Available options:*\n`;
-        response.buttons.forEach((button, index) => {
-          fallbackText += `\n${index + 1}. ${button}`;
-        });
+        let fallbackText = buildTextWithButtons(
+          baseText,
+          response.buttons,
+          WA_TEXT_MAX_LEN
+        );
         fallbackText += '\n\nPlease type the number of your choice.';
         const fallbackData = {
           messaging_product: 'whatsapp',
@@ -1064,7 +1151,7 @@ async function sendWhatsAppResponse(to, response, options = {}) {
           type: 'text',
           text: {
             preview_url: false,
-            body: fallbackText,
+            body: trimText(fallbackText, WA_TEXT_MAX_LEN),
           },
         };
         const fallbackResult = await dispatchWhatsAppSend({
@@ -1079,6 +1166,16 @@ async function sendWhatsAppResponse(to, response, options = {}) {
         return fallbackResult;
       } catch (fallbackError) {
         console.error('Fallback attempt failed:', fallbackError.response ? fallbackError.response.data : fallbackError.message);
+        if (isOutside24hWindowError(fallbackError)) {
+          try {
+            return await sendWhatsAppTemplate(to, {
+              name: DEFAULT_TEMPLATE_NAME,
+              language: DEFAULT_TEMPLATE_LANGUAGE,
+            });
+          } catch (templateError) {
+            console.error('Template fallback failed:', templateError.response?.data || templateError.message);
+          }
+        }
       }
     }
     throw error;
