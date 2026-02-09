@@ -369,8 +369,8 @@ function formatConversationTail(session, maxItems = 6) {
   const tail = session.conversation_history.slice(-maxItems);
   const lines = tail
     .map((item) => {
-      if (item.user) return `U: ${trimText(item.user, 80)}`;
-      if (item.bot) return `B: ${trimText(item.bot, 80)}`;
+      if (item.user) return `U: ${compactText(item.user, 80)}`;
+      if (item.bot) return `B: ${compactText(item.bot, 80)}`;
       return "";
     })
     .filter(Boolean);

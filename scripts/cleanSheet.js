@@ -275,6 +275,20 @@ function compactText(value, maxLen = 180) {
   return `${cleaned.slice(0, Math.max(0, maxLen - 3))}...`;
 }
 
+function normalizeWhitespace(value) {
+  if (!value) return '';
+  return String(value).replace(/\s+/g, ' ').trim();
+}
+
+function stripOuterQuotes(value) {
+  if (!value) return '';
+  const text = String(value).trim();
+  if (text.startsWith('"') && text.endsWith('"')) {
+    return text.slice(1, -1);
+  }
+  return text;
+}
+
 function isTruthy(value) {
   if (value === true) return true;
   if (value === false) return false;
@@ -285,7 +299,7 @@ function isTruthy(value) {
 
 function parseMaybeJson(value) {
   if (!value) return null;
-  const text = String(value).trim();
+  const text = stripOuterQuotes(String(value).trim());
   if (!text.startsWith('{')) return null;
   try {
     return JSON.parse(text);
@@ -296,7 +310,8 @@ function parseMaybeJson(value) {
 
 function stripMessagePrefix(text) {
   if (!text) return '';
-  const match = String(text).match(/^(WEBHOOK|TEST)_[^_]+_(.*)$/);
+  const cleaned = stripOuterQuotes(String(text).trim());
+  const match = cleaned.match(/^(WEBHOOK|TEST)_[^_]+_(.*)$/);
   return match ? match[2] : text;
 }
 
@@ -329,8 +344,8 @@ function formatConversationTailFromSnapshot(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.conversation_history_tail)) return '';
   const lines = snapshot.conversation_history_tail
     .map((item) => {
-      if (item.user) return `U: ${trimText(item.user, 80)}`;
-      if (item.bot) return `B: ${trimText(item.bot, 80)}`;
+      if (item.user) return `U: ${compactText(item.user, 80)}`;
+      if (item.bot) return `B: ${compactText(item.bot, 80)}`;
       return '';
     })
     .filter(Boolean);
@@ -387,12 +402,13 @@ function normalizeRow(row, headerMap, headerIsNew) {
   }
 
   const snapshot = parseMaybeJson(data.session_snapshot_json || data.session_summary_text);
-  const sessionSummary = data.session_summary_text && !snapshot
-    ? data.session_summary_text
-    : formatSessionSummaryFromSnapshot(snapshot) || buildSummaryFromRow(data);
-  const conversationTail = data.conversation_tail_text && !snapshot
-    ? data.conversation_tail_text
-    : formatConversationTailFromSnapshot(snapshot);
+  const sessionSummaryRaw = data.session_summary_text || '';
+  const sessionSummary = formatSessionSummaryFromSnapshot(snapshot) ||
+    buildSummaryFromRow(data) ||
+    normalizeWhitespace(stripOuterQuotes(sessionSummaryRaw));
+  const conversationTailRaw = data.conversation_tail_text || '';
+  const conversationTail = formatConversationTailFromSnapshot(snapshot) ||
+    normalizeWhitespace(stripOuterQuotes(conversationTailRaw));
 
   const lastMessageRaw = data.last_message_text || '';
   const cleanedMessage = stripMessagePrefix(lastMessageRaw);
@@ -403,9 +419,10 @@ function normalizeRow(row, headerMap, headerIsNew) {
     '';
 
   const totalRaw = data.total_price_raw || data.total_price;
+  const totalNumber = Number(totalRaw);
   const totalDisplay =
     data.total_price_display ||
-    formatPriceInr(totalRaw);
+    (Number.isFinite(totalNumber) && totalNumber > 0 ? formatPriceInr(totalNumber) : '');
 
   const lastSeen = data.last_message_at || data.last_message_at_utc || data.last_seen;
   const firstSeen = data.first_seen_ist || data.first_seen;
@@ -425,7 +442,7 @@ function normalizeRow(row, headerMap, headerIsNew) {
     preferred_date: toTitleCase(data.preferred_date || ''),
     preferred_time: toTitleCase(data.preferred_time || ''),
     total_price_display: totalDisplay,
-    total_price_raw: Number.isFinite(Number(totalRaw)) ? Number(totalRaw) : '',
+    total_price_raw: Number.isFinite(totalNumber) && totalNumber > 0 ? totalNumber : '',
     last_message_text: compactText(cleanedMessage),
     last_message_at_ist: data.last_message_at_ist || formatDateTime(lastSeen, 'Asia/Kolkata'),
     last_message_at_utc: data.last_message_at_utc || toIsoString(lastSeen),
@@ -434,8 +451,8 @@ function normalizeRow(row, headerMap, headerIsNew) {
     message_source: messageSource,
     session_id: data.session_id || '',
     user_id: data.user_id || '',
-    session_summary_text: sessionSummary,
-    conversation_tail_text: conversationTail,
+    session_summary_text: trimText(sessionSummary),
+    conversation_tail_text: trimText(conversationTail),
   };
 
   return normalized;
