@@ -420,9 +420,15 @@ function normalizeRow(row, headerMap, headerIsNew) {
 
   const totalRaw = data.total_price_raw || data.total_price;
   const totalNumber = Number(totalRaw);
+  const totalDisplayRaw = normalizeWhitespace(stripOuterQuotes(data.total_price_display || ''));
+  const totalDisplayIsZero =
+    totalDisplayRaw === '0' ||
+    /^inr\s*0(\.0+)?$/i.test(totalDisplayRaw);
   const totalDisplay =
-    data.total_price_display ||
-    (Number.isFinite(totalNumber) && totalNumber > 0 ? formatPriceInr(totalNumber) : '');
+    totalDisplayIsZero
+      ? ''
+      : (totalDisplayRaw ||
+          (Number.isFinite(totalNumber) && totalNumber > 0 ? formatPriceInr(totalNumber) : ''));
 
   const lastSeen = data.last_message_at || data.last_message_at_utc || data.last_seen;
   const firstSeen = data.first_seen_ist || data.first_seen;
