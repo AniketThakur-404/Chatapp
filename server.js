@@ -34,6 +34,10 @@ const WA_INTERACTIVE_BODY_MAX_LEN = Math.max(
   200,
   parseInt(process.env.WA_INTERACTIVE_BODY_MAX_LEN || '900', 10)
 );
+const WA_WEBHOOK_SEND_TIMEOUT_MS = Math.max(
+  2000,
+  parseInt(process.env.WA_WEBHOOK_SEND_TIMEOUT_MS || '7000', 10)
+);
 const FAST_FAIL_QUEUE_ENABLED =
   (process.env.WA_FAST_FAIL_QUEUE || '').toLowerCase().trim() === 'true';
 const WA_ALLOW_SERVERLESS_QUEUE =
@@ -658,6 +662,154 @@ function buildSheetLead({
   };
 }
 
+async function persistWebhookData({
+  senderId,
+  messageText,
+  botResponse,
+  liveSession,
+  now,
+  totalPrice,
+}) {
+  try {
+    const sessionSnapshot = buildSessionSnapshot(liveSession);
+
+    // ====================================================
+    // DATABASE INTEGRATION START (best-effort, after send)
+    // ====================================================
+    let user = null;
+    let session = null;
+    if (!SKIP_DB_RUNTIME) {
+      try {
+        user = await withTimeout(
+          prisma.user.findUnique({ where: { phone_number: senderId } }),
+          DB_OP_TIMEOUT_MS,
+          'findUnique user'
+        );
+        if (!user) {
+          user = await withTimeout(
+            prisma.user.create({ data: { phone_number: senderId } }),
+            DB_OP_TIMEOUT_MS,
+            'create user'
+          );
+        }
+
+        session = await withTimeout(
+          prisma.session.findFirst({ where: { userId: user.id } }),
+          DB_OP_TIMEOUT_MS,
+          'findFirst session'
+        );
+        if (!session) {
+          session = await withTimeout(
+            prisma.session.create({
+              data: {
+                userId: user.id,
+                current_step: 'welcome',
+              },
+            }),
+            DB_OP_TIMEOUT_MS,
+            'create session'
+          );
+        }
+
+        await withTimeout(
+          prisma.message.create({
+            data: {
+              sessionId: session.id,
+              sender: 'user',
+              message_text: messageText,
+            },
+          }),
+          DB_OP_TIMEOUT_MS,
+          'create user message'
+        );
+
+        await withTimeout(
+          prisma.message.create({
+            data: {
+              sessionId: session.id,
+              sender: 'bot',
+              message_text: botResponse?.text || '',
+            },
+          }),
+          DB_OP_TIMEOUT_MS,
+          'create bot message'
+        );
+
+        if (liveSession?.user_name && liveSession?.name_collected && !user.name) {
+          await withTimeout(
+            prisma.user.update({
+              where: { id: user.id },
+              data: { name: liveSession.user_name },
+            }),
+            DB_OP_TIMEOUT_MS,
+            'update user name'
+          );
+          console.log(`Saved user name: ${liveSession.user_name} for ${senderId}`);
+        }
+
+        session = await withTimeout(
+          prisma.session.update({
+            where: { id: session.id },
+            data: {
+              current_step: liveSession?.step || 'unknown',
+              selected_package: liveSession?.selected_package || null,
+              location: liveSession?.user_location || liveSession?.location || null,
+              session_data: sessionSnapshot,
+            },
+          }),
+          DB_OP_TIMEOUT_MS,
+          'update session'
+        );
+      } catch (dbError) {
+        console.error('DB error (continuing):', dbError);
+      }
+    }
+    // ====================================================
+    // DATABASE INTEGRATION END
+    // ====================================================
+
+    console.log("🟡 Reached SHEET section for:", senderId, "TAB:", process.env.GOOGLE_SHEETS_TAB_NAME);
+    console.log("🟡 SHEET ENV:", {
+      SPREADSHEET_ID: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+      TAB: process.env.GOOGLE_SHEETS_TAB_NAME,
+      CREDS: process.env.GOOGLE_SERVICE_ACCOUNT_PATH,
+    });
+
+    console.log("🟡 ABOUT TO CALL upsertLeadToSheet()", {
+      SPREADSHEET_ID: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+      TAB: process.env.GOOGLE_SHEETS_TAB_NAME,
+      HAS_CREDS_JSON: !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+      HAS_CREDS_B64: !!process.env.GOOGLE_SERVICE_ACCOUNT_B64,
+      HAS_CREDS_PATH: !!process.env.GOOGLE_SERVICE_ACCOUNT_PATH,
+    });
+
+    try {
+      const lead = buildSheetLead({
+        senderId,
+        messageText,
+        now,
+        user,
+        session,
+        liveSession,
+        totalPrice,
+        botInstance: bot,
+        source: 'webhook',
+      });
+      const result = await upsertLeadToSheet(lead);
+      console.log("✅ SHEET UPDATED ✅ RESULT:", result);
+      console.log("✅ Sheet upsert success:", result);
+    } catch (sheetError) {
+      console.error("❌ SHEET FAILED ❌", sheetError?.message);
+      console.error("❌ FULL ERROR:", sheetError);
+      console.error("❌ Sheet sync error FULL:", sheetError);
+      console.error("❌ Sheet sync error MSG:", sheetError?.message);
+      console.error("❌ Sheet sync error DATA:", sheetError?.response?.data);
+    }
+  } catch (error) {
+    console.error('Post-send persistence failed:', error);
+  }
+}
+
 // ====================================================
 // ✅ 1. DATABASE SETUP (NeonDB PostgreSQL via pg driver)
 // ====================================================
@@ -752,11 +904,10 @@ app.post('/webhook', async (req, res) => {
     } else {
       console.log('🔔 Webhook POST received');
     }
-    res.status(200).json({ status: 'received' }); // immediate response to WhatsApp
 
     if (body.object !== 'whatsapp_business_account') {
       console.log('❌ Not a WhatsApp business account webhook');
-      return;
+      return res.status(200).json({ status: 'ignored' });
     }
     const entry = body.entry?.[0];
     const change = entry?.changes?.[0];
@@ -765,7 +916,7 @@ app.post('/webhook', async (req, res) => {
       if (change?.value?.statuses) {
         console.log('📊 Status update received (ignoring)');
       }
-      return;
+      return res.status(200).json({ status: 'ignored' });
     }
 
     const senderId = message.from;
@@ -791,157 +942,39 @@ console.log("🟣 WEBHOOK HIT CONFIRMED ✅");
     // 🤖 Process message with bot
     const botResponse = bot.processMessage(senderId, messageText, null);
 
-    // Send WhatsApp message first
-    console.log("🟡 About to write to Sheet for:", senderId);
-
-    try {
-      console.log(`📤 Attempting to send WhatsApp message to ${senderId}`);
-      await sendWhatsAppResponse(senderId, botResponse, { fastFail: true });
-      console.log(`✅ WhatsApp send attempt complete for ${senderId}`);
-    } catch (sendError) {
-      console.error('❌ WhatsApp send failed:', sendError.response?.data || sendError.message);
-      // Continue processing (DB/Sheets) even if send fails
-    }
-
     const liveSession = bot.getSession(senderId);
-    const sessionSnapshot = buildSessionSnapshot(liveSession);
     const now = new Date();
     const totalPrice = computeTotalPriceSafe(bot, liveSession);
 
-    // ====================================================
-    // DATABASE INTEGRATION START (best-effort, after send)
-    // ====================================================
-    let user = null;
-    let session = null;
-    if (!SKIP_DB_RUNTIME) {
-      try {
-        user = await withTimeout(
-          prisma.user.findUnique({ where: { phone_number: senderId } }),
-          DB_OP_TIMEOUT_MS,
-          'findUnique user'
-        );
-        if (!user) {
-          user = await withTimeout(
-            prisma.user.create({ data: { phone_number: senderId } }),
-            DB_OP_TIMEOUT_MS,
-            'create user'
-          );
-        }
-
-        session = await withTimeout(
-          prisma.session.findFirst({ where: { userId: user.id } }),
-          DB_OP_TIMEOUT_MS,
-          'findFirst session'
-        );
-        if (!session) {
-          session = await withTimeout(
-            prisma.session.create({
-              data: {
-                userId: user.id,
-                current_step: 'welcome',
-              },
-            }),
-            DB_OP_TIMEOUT_MS,
-            'create session'
-          );
-        }
-
-        await withTimeout(
-          prisma.message.create({
-            data: {
-              sessionId: session.id,
-              sender: 'user',
-              message_text: messageText,
-            },
-          }),
-          DB_OP_TIMEOUT_MS,
-          'create user message'
-        );
-
-        await withTimeout(
-          prisma.message.create({
-            data: {
-              sessionId: session.id,
-              sender: 'bot',
-              message_text: botResponse.text,
-            },
-          }),
-          DB_OP_TIMEOUT_MS,
-          'create bot message'
-        );
-
-        if (liveSession?.user_name && liveSession?.name_collected && !user.name) {
-          await withTimeout(
-            prisma.user.update({
-              where: { id: user.id },
-              data: { name: liveSession.user_name }
-            }),
-            DB_OP_TIMEOUT_MS,
-            'update user name'
-          );
-          console.log(`Saved user name: ${liveSession.user_name} for ${senderId}`);
-        }
-
-        session = await withTimeout(
-          prisma.session.update({
-            where: { id: session.id },
-            data: {
-              current_step: liveSession?.step || 'unknown',
-              selected_package: liveSession?.selected_package || null,
-              location: liveSession?.user_location || liveSession?.location || null,
-              session_data: sessionSnapshot,
-            },
-          }),
-          DB_OP_TIMEOUT_MS,
-          'update session'
-        );
-      } catch (dbError) {
-        console.error('DB error (continuing):', dbError);
-      }
-    }
-    // ====================================================
-    // DATABASE INTEGRATION END
-    // ====================================================
-console.log("🟡 Reached SHEET section for:", senderId, "TAB:", process.env.GOOGLE_SHEETS_TAB_NAME);
-console.log("🟡 SHEET ENV:", {
-  SPREADSHEET_ID: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
-  TAB: process.env.GOOGLE_SHEETS_TAB_NAME,
-  CREDS: process.env.GOOGLE_SERVICE_ACCOUNT_PATH
-});
-
-    // ✅ GOOGLE SHEETS UPSERT (updated logging + remove unused fields)
-    console.log("🟡 ABOUT TO CALL upsertLeadToSheet()", {
-  SPREADSHEET_ID: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
-  TAB: process.env.GOOGLE_SHEETS_TAB_NAME,
-  HAS_CREDS_JSON: !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
-  HAS_CREDS_B64: !!process.env.GOOGLE_SERVICE_ACCOUNT_B64,
-  HAS_CREDS_PATH: !!process.env.GOOGLE_SERVICE_ACCOUNT_PATH,
-});
-
+    let sendResult = null;
+    let sendError = null;
     try {
-      const lead = buildSheetLead({
-        senderId,
-        messageText,
-        now,
-        user,
-        session,
-        liveSession,
-        totalPrice,
-        botInstance: bot,
-        source: "webhook",
-      });
-      const result = await upsertLeadToSheet(lead);
-console.log("✅ SHEET UPDATED ✅ RESULT:", result);
-
-      console.log("✅ Sheet upsert success:", result);
-    } catch (sheetError) {
-      console.error("❌ SHEET FAILED ❌", sheetError?.message);
-console.error("❌ FULL ERROR:", sheetError);
-
-      console.error("❌ Sheet sync error FULL:", sheetError);
-  console.error("❌ Sheet sync error MSG:", sheetError?.message);
-  console.error("❌ Sheet sync error DATA:", sheetError?.response?.data);
+      console.log(`📤 Attempting to send WhatsApp message to ${senderId}`);
+      sendResult = await withTimeout(
+        sendWhatsAppResponse(senderId, botResponse, { fastFail: true }),
+        WA_WEBHOOK_SEND_TIMEOUT_MS,
+        'sendWhatsAppResponse'
+      );
+      console.log(`✅ WhatsApp send attempt complete for ${senderId}`, sendResult?.queued ? '(queued)' : '');
+    } catch (error) {
+      sendError = error;
+      console.error('❌ WhatsApp send failed:', error.response?.data || error.message);
     }
+
+    res.status(200).json({
+      status: 'received',
+      sent: !sendError,
+      queued: Boolean(sendResult?.queued),
+    });
+
+    void persistWebhookData({
+      senderId,
+      messageText,
+      botResponse,
+      liveSession,
+      now,
+      totalPrice,
+    });
 
   } catch (error) {
     console.error('❌ Webhook error:', error);
