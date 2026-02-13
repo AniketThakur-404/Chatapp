@@ -16,7 +16,10 @@ const { upsertLeadToSheet } = require("./googleSheetsSync");
     console.log("✅ SHEET TEST SUCCESS:", result);
     process.exit(0);
   } catch (e) {
-    console.error("❌ SHEET TEST FAILED:", e?.response?.data || e.message || e);
+    console.error("❌ SHEET TEST FAILED:", e?.message || e);
+    if (e?.response?.data) {
+      console.error("❌ SHEET API ERROR DATA:", e.response.data);
+    }
     process.exit(1);
   }
 })();

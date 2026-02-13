@@ -1,10 +1,17 @@
-// googleSheetsSync.js (Vercel-safe)
-// Uses GOOGLE_SERVICE_ACCOUNT_JSON env var (NOT local file)
-
+const fs = require("fs");
+const path = require("path");
 const { google } = require("googleapis");
 
-const SPREADSHEET_ID = (process.env.GOOGLE_SHEETS_SPREADSHEET_ID || "").trim();
-const TAB_NAME = (process.env.GOOGLE_SHEETS_TAB_NAME || "Sheet1").trim();
+const SPREADSHEET_ID = (
+  process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
+  process.env.GOOGLE_SHEET_ID ||
+  ""
+).trim();
+const TAB_NAME = (
+  process.env.GOOGLE_SHEETS_TAB_NAME ||
+  process.env.GOOGLE_SHEET_NAME ||
+  "Sheet1"
+).trim();
 
 // Keep these headers EXACTLY in this order (A..)
 const HEADERS = [
@@ -61,33 +68,101 @@ function toSheetValue(v) {
   return String(v);
 }
 
-// ✅ Vercel-safe auth (no fs, no keyFile)
-async function getSheetsClient() {
-  must(SPREADSHEET_ID, "GOOGLE_SHEETS_SPREADSHEET_ID");
-  must(TAB_NAME, "GOOGLE_SHEETS_TAB_NAME");
+function normalizeRawJson(raw) {
+  let text = String(raw || "").trim();
+  if (!text) return "";
 
-  const raw = (process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "").trim();
-  must(raw, "GOOGLE_SERVICE_ACCOUNT_JSON");
+  if (text.startsWith("GOOGLE_SERVICE_ACCOUNT_JSON=")) {
+    text = text.slice("GOOGLE_SERVICE_ACCOUNT_JSON=".length).trim();
+  }
+
+  if (
+    (text.startsWith("'") && text.endsWith("'")) ||
+    (text.startsWith('"') && text.endsWith('"'))
+  ) {
+    text = text.slice(1, -1).trim();
+  }
+
+  return text;
+}
+
+function loadServiceAccountJsonRaw() {
+  const fromJson = normalizeRawJson(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  if (fromJson) {
+    return { raw: fromJson, source: "GOOGLE_SERVICE_ACCOUNT_JSON" };
+  }
+
+  const fromB64 = (process.env.GOOGLE_SERVICE_ACCOUNT_B64 || "").trim();
+  if (fromB64) {
+    let decoded;
+    try {
+      decoded = Buffer.from(fromB64, "base64").toString("utf8");
+    } catch (error) {
+      throw new Error("GOOGLE_SERVICE_ACCOUNT_B64 is not valid base64.");
+    }
+    return {
+      raw: normalizeRawJson(decoded),
+      source: "GOOGLE_SERVICE_ACCOUNT_B64",
+    };
+  }
+
+  const filePath = (
+    process.env.GOOGLE_SERVICE_ACCOUNT_PATH ||
+    process.env.GOOGLE_SERVICE_ACCOUNT_FILE ||
+    ""
+  ).trim();
+  if (filePath) {
+    const resolvedPath = path.isAbsolute(filePath)
+      ? filePath
+      : path.resolve(process.cwd(), filePath);
+
+    let fileContents = "";
+    try {
+      fileContents = fs.readFileSync(resolvedPath, "utf8");
+    } catch (error) {
+      throw new Error(
+        `Unable to read service account file at ${resolvedPath}: ${error.message}`
+      );
+    }
+
+    return { raw: normalizeRawJson(fileContents), source: resolvedPath };
+  }
+
+  throw new Error(
+    "Missing service account credentials. Set one of GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_SERVICE_ACCOUNT_B64, GOOGLE_SERVICE_ACCOUNT_PATH, or GOOGLE_SERVICE_ACCOUNT_FILE."
+  );
+}
+
+function parseServiceAccount(raw, sourceName) {
+  must(raw, sourceName);
 
   let creds;
   try {
     creds = JSON.parse(raw);
   } catch (e) {
-    throw new Error(
-      "GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON. Paste full service-account.json content into Vercel env."
-    );
+    throw new Error(`${sourceName} is not valid JSON.`);
   }
 
-  // Important for Vercel/env formatting
+  // Preserve multiline key formatting when provided with escaped newlines.
   if (creds.private_key) {
     creds.private_key = creds.private_key.replace(/\\n/g, "\n");
   }
 
   if (!creds.client_email || !creds.private_key) {
     throw new Error(
-      "Service account JSON missing client_email or private_key. Re-download service-account.json and paste again."
+      `Service account JSON from ${sourceName} is missing client_email or private_key.`
     );
   }
+
+  return creds;
+}
+
+async function getSheetsClient() {
+  must(SPREADSHEET_ID, "GOOGLE_SHEETS_SPREADSHEET_ID (or GOOGLE_SHEET_ID)");
+  must(TAB_NAME, "GOOGLE_SHEETS_TAB_NAME (or GOOGLE_SHEET_NAME)");
+
+  const { raw, source } = loadServiceAccountJsonRaw();
+  const creds = parseServiceAccount(raw, source);
 
   const auth = new google.auth.JWT({
     email: creds.client_email,
@@ -95,11 +170,13 @@ async function getSheetsClient() {
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
 
-  return google.sheets({ version: "v4", auth });
+  return {
+    sheets: google.sheets({ version: "v4", auth }),
+    clientEmail: creds.client_email,
+  };
 }
 
 async function ensureHeaderRow(sheets) {
-  // Read first row A1:T1
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: `${TAB_NAME}!A1:${LAST_COLUMN}1`,
@@ -125,7 +202,6 @@ async function ensureHeaderRow(sheets) {
 }
 
 async function findRowByPhone(sheets, phone) {
-  // Read column A to locate existing row
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: `${TAB_NAME}!A:A`,
@@ -133,49 +209,51 @@ async function findRowByPhone(sheets, phone) {
 
   const colA = res.data.values || [];
 
-  // colA[0] is header row
   for (let i = 1; i < colA.length; i++) {
     const cell = String((colA[i] && colA[i][0]) || "").trim();
-    if (cell === phone) return i + 1; // sheet row number
+    if (cell === phone) return i + 1;
   }
   return -1;
 }
 
-/**
- * Upsert lead by phone_number:
- * - If phone exists -> update row A..T
- * - Else -> append new row A..T
- */
 async function upsertLeadToSheet(lead) {
-  const sheets = await getSheetsClient();
+  const { sheets, clientEmail } = await getSheetsClient();
 
   const phone = String(lead.phone_number || "").trim();
   if (!phone) throw new Error("upsertLeadToSheet: lead.phone_number is required");
 
-  await ensureHeaderRow(sheets);
+  try {
+    await ensureHeaderRow(sheets);
 
-  const rowValues = HEADERS.map((header) => toSheetValue(lead[header.key]));
-  const foundRow = await findRowByPhone(sheets, phone);
+    const rowValues = HEADERS.map((header) => toSheetValue(lead[header.key]));
+    const foundRow = await findRowByPhone(sheets, phone);
 
-  if (foundRow > 0) {
-    await sheets.spreadsheets.values.update({
+    if (foundRow > 0) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${TAB_NAME}!A${foundRow}:${LAST_COLUMN}${foundRow}`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: { values: [rowValues] },
+      });
+      return { action: "updated", row: foundRow };
+    }
+
+    await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${TAB_NAME}!A${foundRow}:${LAST_COLUMN}${foundRow}`,
+      range: `${TAB_NAME}!A:${LAST_COLUMN}`,
       valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
       requestBody: { values: [rowValues] },
     });
-    return { action: "updated", row: foundRow };
+
+    return { action: "inserted" };
+  } catch (error) {
+    if (error?.response?.status === 403) {
+      const baseMessage = error.message || "Google Sheets permission denied";
+      error.message = `${baseMessage}. Share spreadsheet ${SPREADSHEET_ID} with ${clientEmail} as Editor.`;
+    }
+    throw error;
   }
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${TAB_NAME}!A:${LAST_COLUMN}`,
-    valueInputOption: "USER_ENTERED",
-    insertDataOption: "INSERT_ROWS",
-    requestBody: { values: [rowValues] },
-  });
-
-  return { action: "inserted" };
 }
 
 module.exports = { upsertLeadToSheet, HEADERS };
