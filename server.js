@@ -980,19 +980,23 @@ console.log("🟣 WEBHOOK HIT CONFIRMED ✅");
       console.error('❌ WhatsApp send failed:', error.response?.data || error.message);
     }
 
+    try {
+      await persistWebhookData({
+        senderId,
+        messageText,
+        botResponse,
+        liveSession,
+        now,
+        totalPrice,
+      });
+    } catch (persistError) {
+      console.error('Post-send persistence failed:', persistError);
+    }
+
     res.status(200).json({
       status: 'received',
       sent: !sendError,
       queued: Boolean(sendResult?.queued),
-    });
-
-    void persistWebhookData({
-      senderId,
-      messageText,
-      botResponse,
-      liveSession,
-      now,
-      totalPrice,
     });
 
   } catch (error) {
